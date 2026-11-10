@@ -210,6 +210,8 @@ main.fade > *:nth-child(n+4) { animation-delay: .09s; }
     margin: 0; padding: 20px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 28px;
     box-shadow: 0 30px 80px rgb(0 0 0 / .55); scrollbar-width: none; }
   main::-webkit-scrollbar { display: none; }
+  main:has(> .hero) { justify-content: center; }
+  .home-actions { position: static; margin-top: 8px; padding: 0; background: none; }
   .backdrop { align-items: center; }
   .sheet { border-radius: 22px; max-height: 86dvh; max-width: 420px; }
   #toast { top: max(40px, calc(50dvh - min(440px, 50dvh - 24px) + 16px)); }

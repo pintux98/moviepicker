@@ -175,11 +175,13 @@ function statsSection(stats) {
     h("span", { class: "stack tight" }, h("strong", {}, titleYear(m)),
       h("span", { class: "muted left" }, `picked ${m.picked}×` + (m.dislikes ? ` · skipped ${m.dislikes}×` : ""))));
   const tile = (m) => h("button", { class: "strip-item", onclick: () => openSheet(m), "aria-label": titleYear(m) }, poster(m, "strip-poster"));
+  const topIds = new Set(stats.top.map((m) => m.id));
+  const recentAddsSomething = stats.recent.some((m) => !topIds.has(m.id));
   return h("section", { class: "stats-home" },
     h("h3", {}, "Most picked"),
     h("div", { class: "rank-list" }, stats.top.map(row)),
-    h("h3", {}, "Picked lately"),
-    h("div", { class: "strip" }, stats.recent.map(tile)));
+    recentAddsSomething ? h("h3", {}, "Picked lately") : null,
+    recentAddsSomething ? h("div", { class: "strip" }, stats.recent.map(tile)) : null);
 }
 
 async function homeScreen() {
