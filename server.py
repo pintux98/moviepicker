@@ -1,0 +1,246 @@
+"""Moviepicker HTTP server: JSON API + static page. Python stdlib only.
+
+Env: TMDB_TOKEN (required), PORT (default 8000).
+"""
+import json
+import os
+import random
+import re
+import secrets
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from game import MAX_ROOMS, GameError, Room
+from tmdb import Tmdb, build_batch
+
+clock = time.time  # tests patch this
+STATIC = Path(__file__).resolve().parent / "static"
+CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+BODY_MAX = 2048
+CREATE_LIMIT, CREATE_WINDOW = 5, 600
+REFILL_NOTICE = "Couldn't load more movies, retrying…"
+TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+         ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
+CSP = ("default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self'; script-src 'self'; "
+       "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+
+
+class App:
+    def __init__(self, tmdb: Tmdb):
+        self.tmdb = tmdb
+        self.rooms: dict[str, Room] = {}
+        self.meta: dict[str, dict] = {}       # code -> {"seed", "page", "refilling"}
+        self.created: dict[str, list[float]] = {}
+        self.lock = threading.Lock()
+
+    # --- rooms ---------------------------------------------------------------
+    def janitor(self, now: float) -> None:
+        for code, room in list(self.rooms.items()):
+            room.tick(now)
+            if room.phase == "closed":
+                del self.rooms[code]
+                self.meta.pop(code, None)
+
+    def room(self, code: str, now: float) -> Room:
+        self.janitor(now)
+        code = code.strip().upper()
+        if code not in self.rooms:
+            raise GameError("This room is closed", 404)
+        return self.rooms[code]
+
+    def create(self, name, ip: str, now: float) -> dict:
+        self.janitor(now)
+        recent = [t for t in self.created.get(ip, []) if now - t < CREATE_WINDOW]
+        if len(recent) >= CREATE_LIMIT:
+            raise GameError("Too many new rooms, try again in a few minutes", 429)
+        if len(self.rooms) >= MAX_ROOMS:
+            raise GameError("Too many rooms open right now, try again later", 503)
+        code = "".join(secrets.choice(CODE_LETTERS) for _ in range(4))
+        while code in self.rooms:
+            code = "".join(secrets.choice(CODE_LETTERS) for _ in range(4))
+        room = Room(code, now)
+        player = room.add_player(name, now)
+        self.created[ip] = recent + [now]
+        self.rooms[code] = room
+        self.meta[code] = {"seed": random.randrange(1 << 30), "page": 1, "refilling": False}
+        return {"code": code, "pid": player.id}
+
+    def action(self, room: Room, pid: str, body: dict, now: float) -> None:
+        kind = body.get("type")
+        if kind == "genres":
+            room.set_genres(pid, body.get("ids"), now)
+        elif kind == "ready":
+            room.set_ready(pid, now)
+        elif kind == "start":
+            room.start(pid, now)
+        elif kind == "swipe":
+            room.swipe(pid, _int(body.get("index")), bool(body.get("yes")), now)
+        elif kind == "start_tournament":
+            room.start_tournament(pid, now)
+        elif kind == "vote":
+            room.vote(pid, _int(body.get("movie_id")), now)
+        elif kind == "close":
+            room.close(pid, now)
+        else:
+            raise GameError("Unknown action", 400)
+
+    # --- deck refill (TMDB calls happen outside the lock) ----------------------
+    def maybe_refill(self, room: Room, now: float) -> None:
+        meta = self.meta.get(room.code)
+        if meta and not meta["refilling"] and room.needs_cards(now):
+            meta["refilling"] = True
+            weights = room.genre_weights(now)
+            exclude = {m.id for m in room.deck}
+            threading.Thread(target=self._refill, args=(room, meta, weights, exclude), daemon=True).start()
+
+    def _refill(self, room: Room, meta: dict, weights: dict, exclude: set) -> None:
+        try:
+            batch = build_batch(self.tmdb, weights, exclude, meta["seed"], meta["page"])
+            if not batch:  # this genre mix ran out: widen to every genre
+                batch = build_batch(self.tmdb, {}, exclude, meta["seed"], meta["page"])
+            batch = [self.tmdb.details(m) for m in batch]
+            with self.lock:
+                room.add_cards(batch)
+                meta["page"] += 1
+                if room.notice == REFILL_NOTICE:
+                    room.notice = None
+        except Exception as e:  # TMDB down/slow/rate-limited: keep the room alive, retry on next poll
+            sys.stderr.write("refill %s: %r\n" % (room.code, e))
+            with self.lock:
+                if room.notice is None:
+                    room.notice = REFILL_NOTICE
+        finally:
+            meta["refilling"] = False
+
+
+def _int(v) -> int:
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise GameError("Bad number", 400)
+    return v
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "moviepicker"
+    sys_version = ""
+    app: App  # set by make_server
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, status: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", CSP)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, status: int, data) -> None:
+        self._send(status, json.dumps(data).encode(), "application/json", {"Cache-Control": "no-store"})
+
+    def _body(self) -> dict:
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > BODY_MAX:
+            raise GameError("Request too big", 413)
+        try:
+            data = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            raise GameError("Bad request", 400)
+        if not isinstance(data, dict):
+            raise GameError("Bad request", 400)
+        return data
+
+    def _ip(self) -> str:
+        return self.headers.get("CF-Connecting-IP") or self.client_address[0]
+
+    def _api(self, method: str) -> None:
+        app, now = self.app, clock()
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        pid = self.headers.get("X-Player", "")
+        try:
+            if method == "GET" and path == "/api/genres":
+                return self._json(200, app.tmdb.genres())
+            body = self._body() if method == "POST" else {}
+            with app.lock:
+                if method == "POST" and path == "/api/rooms":
+                    return self._json(200, app.create(body.get("name"), self._ip(), now))
+                m = re.fullmatch(r"/api/rooms/([^/]+)(/join|/action)?", path)
+                if not m:
+                    raise GameError("Not found", 404)
+                room = app.room(m.group(1), now)
+                if method == "POST" and m.group(2) == "/join":
+                    p = room.add_player(body.get("name"), now)
+                    out = {"code": room.code, "pid": p.id}
+                elif method == "POST" and m.group(2) == "/action":
+                    app.action(room, pid, body, now)
+                    out = {"ok": True}
+                elif method == "GET" and m.group(2) is None:
+                    room.seen(pid, now)
+                    room.tick(now)
+                    out = room.state_for(pid, now)
+                else:
+                    raise GameError("Not found", 404)
+                app.maybe_refill(room, now)
+            self._json(200, out)
+        except GameError as e:
+            self._json(e.status, {"error": str(e)})
+        except Exception as e:
+            sys.stderr.write("error %s %s: %r\n" % (method, path, e))
+            self._json(500, {"error": "Something went wrong"})
+
+    def _static(self) -> None:
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path == "/" or re.fullmatch(r"/r/[A-Za-z]{4}", path):
+            f = STATIC / "index.html"
+        elif path.startswith("/static/"):
+            f = (STATIC / path[len("/static/"):]).resolve()
+            if STATIC not in f.parents or not f.is_file():
+                f = None
+        elif path in ("/favicon.ico", "/apple-touch-icon.png"):
+            f = STATIC / path.lstrip("/")
+        else:
+            f = None
+        if f is None or not f.is_file():
+            return self._send(404, b"Not found", "text/plain; charset=utf-8")
+        self._send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"),
+                   {"Cache-Control": "no-cache"})
+
+    def do_GET(self):
+        if self.path.startswith("/api/"):
+            self._api("GET")
+        else:
+            self._static()
+
+    def do_POST(self):
+        if self.path.startswith("/api/"):
+            self._api("POST")
+        else:
+            self._send(404, b"Not found", "text/plain; charset=utf-8")
+
+
+def make_server(host: str, port: int, tmdb) -> ThreadingHTTPServer:
+    handler = type("BoundHandler", (Handler,), {"app": App(tmdb)})
+    srv = ThreadingHTTPServer((host, port), handler)
+    srv.daemon_threads = True
+    return srv
+
+
+def main() -> None:
+    token = os.environ.get("TMDB_TOKEN")
+    if not token:
+        sys.exit("TMDB_TOKEN is not set")
+    port = int(os.environ.get("PORT", "8000"))
+    print("moviepicker on :%d" % port, flush=True)
+    make_server("0.0.0.0", port, Tmdb(token)).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

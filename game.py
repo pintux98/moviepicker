@@ -11,6 +11,7 @@ SHORTLIST_SIZE = 4    # matches that start the tournament
 RELAX_AFTER = 25      # resolved cards in a row without a match -> majority counts
 MAX_LEAD = 15         # how far a player may swipe ahead of the group
 NAME_MAX = 20
+MAX_GENRES = 32
 
 
 @dataclass
@@ -83,16 +84,16 @@ class Room:
             raise GameError("You're not in this room", 403)
         return self.players[pid]
 
-    def _act(self, pid: str | None, now: float) -> Player | None:
-        """Every player action: room must be open, counts as activity and as a heartbeat."""
+    def _act(self, pid: str, now: float) -> Player:
+        """Every player action: room must be open; only authenticated calls count as activity."""
+        self._open()
+        p = self._player(pid)  # raises 403 before anything is written
+        p.last_seen = self.last_action = now
+        return p
+
+    def _open(self):
         if self.phase == "closed":
             raise GameError("This room is closed", 404)
-        self.last_action = now
-        if pid is None:
-            return None
-        p = self._player(pid)
-        p.last_seen = now
-        return p
 
     def _host_only(self, pid: str):
         if pid != self.host_id:
@@ -100,14 +101,15 @@ class Room:
 
     # --- players -------------------------------------------------------------
     def add_player(self, name: str, now: float) -> Player:
-        self._act(None, now)
-        name = (name or "").strip()[:NAME_MAX]
+        self._open()
+        name = (name or "").strip()[:NAME_MAX] if isinstance(name, str) else ""
         if not name:
             raise GameError("Pick a name", 400)
         if len(self.players) >= MAX_PLAYERS:
             raise GameError("Room is full", 409)
         if self.phase == "winner":
             raise GameError("This room already picked its movie", 409)
+        self.last_action = now  # only a successful join counts as activity
         p = Player(secrets.token_urlsafe(8), name, now, now, cursor=self.resolved)
         self.players[p.id] = p
         if self.host_id is None:
@@ -149,7 +151,11 @@ class Room:
 
     def set_genres(self, pid: str, genre_ids: list[int], now: float) -> None:
         p = self._act(pid, now)
-        p.genres = sorted({int(g) for g in genre_ids})
+        if self.phase not in ("lobby", "genres", "swiping"):
+            raise GameError("Too late to change genres", 409)
+        if not isinstance(genre_ids, list) or len(genre_ids) > MAX_GENRES                 or not all(isinstance(g, int) and not isinstance(g, bool) for g in genre_ids):
+            raise GameError("Bad genre list", 400)
+        p.genres = sorted(set(genre_ids))
 
     def set_ready(self, pid: str, now: float) -> None:
         p = self._act(pid, now)

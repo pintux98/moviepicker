@@ -78,6 +78,31 @@ class Basics(unittest.TestCase):
             r.add_player("late", 2 * IDLE_CLOSE)
         self.assertEqual(e.exception.status, 404)
 
+    def test_rejected_calls_do_not_count_as_activity(self):
+        r, (a,) = room_with(1)
+        for call in (lambda: r.start("intruder", 500), lambda: r.add_player("", 500)):
+            with self.assertRaises(GameError):
+                call()
+        r.tick(IDLE_CLOSE)
+        self.assertEqual(r.phase, "closed")
+
+    def test_genres_only_before_tournament(self):
+        r, ps = room_with(2)
+        r.set_genres(ps[0].id, [16], 1)           # lobby ok
+        r.start(ps[0].id, 1); r.start(ps[0].id, 1)
+        r.set_genres(ps[1].id, [35], 1)           # swiping ok (late joiners)
+        r.phase = "tournament"
+        with self.assertRaises(GameError) as e:
+            r.set_genres(ps[0].id, [28], 1)
+        self.assertEqual(e.exception.status, 409)
+
+    def test_genres_input_validated(self):
+        r, (a,) = room_with(1)
+        for bad in (["x"], "16", list(range(40)), [None]):
+            with self.assertRaises(GameError) as e:
+                r.set_genres(a.id, bad, 1)
+            self.assertEqual(e.exception.status, 400)
+
     def test_genre_weights(self):
         r, (a, b) = room_with(2)
         r.set_genres(a.id, [16, 35], 1)
