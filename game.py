@@ -72,6 +72,10 @@ class Room:
         self.no_match_streak = 0
         self.notice: str | None = None
         self.last_match: dict | None = None
+        self.matches: list[dict] = []        # {"a", "b": Movie, "round": str, "winner": Movie | None}
+        self.bye: Movie | None = None
+        self.pair_votes: dict[str, int] = {}  # player id -> movie id, current pair only
+        self.winner: Movie | None = None
 
     # --- helpers -------------------------------------------------------------
     def _player(self, pid: str) -> Player:
@@ -124,6 +128,8 @@ class Room:
             return
         if self.phase == "swiping":
             self._resolve(now)  # someone going away can complete a card
+        elif self.phase == "tournament":
+            self._resolve_pair(now)
         host = self.players.get(self.host_id)
         if host is None or now - host.last_seen > AWAY:
             active = sorted(self.active(now), key=lambda p: p.joined)
@@ -206,8 +212,76 @@ class Room:
                     self.relaxed = True
                     self.notice = "Loosening up: majority now counts"
 
+    # --- tournament ------------------------------------------------------------
+    def start_tournament(self, pid: str, now: float) -> None:
+        self._act(pid, now)
+        self._host_only(pid)
+        if self.phase != "swiping" or not self.shortlist:
+            raise GameError("Need at least one match first", 409)
+        self._begin_tournament(now)
+
     def _begin_tournament(self, now: float) -> None:
+        e = self.shortlist[:SHORTLIST_SIZE]
         self.phase = "tournament"
+        if len(e) == 1:
+            self._finish(e[0])
+        elif len(e) == 2:
+            self.matches = [self._match(e[0], e[1], "Final")]
+        elif len(e) == 3:
+            self.bye = max(e, key=lambda m: (m.rating, -e.index(m)))
+            a, b = [m for m in e if m is not self.bye]
+            self.matches = [self._match(a, b, "Semi-final")]
+        else:
+            self.matches = [self._match(e[0], e[1], "Semi-final 1 of 2"),
+                            self._match(e[2], e[3], "Semi-final 2 of 2")]
+
+    @staticmethod
+    def _match(a: Movie, b: Movie, name: str) -> dict:
+        return {"a": a, "b": b, "round": name, "winner": None}
+
+    @property
+    def current(self) -> dict | None:
+        return next((m for m in self.matches if m["winner"] is None), None)
+
+    @property
+    def pair(self) -> tuple[Movie, Movie] | None:
+        m = self.current
+        return (m["a"], m["b"]) if m else None
+
+    def vote(self, pid: str, movie_id: int, now: float) -> None:
+        self._act(pid, now)
+        m = self.current
+        if self.phase != "tournament" or m is None:
+            raise GameError("No vote right now", 409)
+        if movie_id not in (m["a"].id, m["b"].id):
+            raise GameError("Pick one of the two movies", 400)
+        self.pair_votes[pid] = movie_id
+        self._resolve_pair(now)
+
+    def _resolve_pair(self, now: float) -> None:
+        m = self.current
+        active = self.active(now)
+        if m is None or not active or any(p.id not in self.pair_votes for p in active):
+            return
+        va = sum(self.pair_votes[p.id] == m["a"].id for p in active)
+        vb = len(active) - va
+        order = [x.id for x in self.shortlist]
+        if va != vb:
+            m["winner"] = m["a"] if va > vb else m["b"]
+        else:  # tie: higher rating, then the earlier match
+            m["winner"] = max((m["a"], m["b"]), key=lambda x: (x.rating, -order.index(x.id)))
+        self.pair_votes = {}
+        if self.current is not None:
+            return
+        if m["round"] == "Final":
+            self._finish(m["winner"])
+        else:
+            finalists = [x["winner"] for x in self.matches] + ([self.bye] if self.bye else [])
+            self.matches.append(self._match(finalists[0], finalists[1], "Final"))
+
+    def _finish(self, movie: Movie) -> None:
+        self.winner = movie
+        self.phase = "winner"
 
     def genre_weights(self, now: float) -> dict[int, int]:
         w: dict[int, int] = {}
@@ -238,6 +312,21 @@ class Room:
             "notice": self.notice,
             "last_match": self.last_match,
             **self._swipe_view(me),
+            **self._tournament_view(pid, now),
+        }
+
+    def _tournament_view(self, pid: str, now: float) -> dict:
+        m = self.current if self.phase == "tournament" else None
+        active = self.active(now)
+        return {
+            "pair": [m["a"].public(), m["b"].public()] if m else None,
+            "round_name": m["round"] if m else None,
+            "my_vote": self.pair_votes.get(pid),
+            "voted": sum(p.id in self.pair_votes for p in active),
+            "of": len(active),
+            "bracket": [{"a": x["a"].title, "b": x["b"].title, "round": x["round"],
+                         "winner": x["winner"].title if x["winner"] else None} for x in self.matches],
+            "winner": self.winner.public() if self.winner else None,
         }
 
     def _swipe_view(self, me: Player) -> dict:

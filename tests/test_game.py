@@ -203,5 +203,92 @@ class Swiping(unittest.TestCase):
         self.assertEqual(len(r.deck), 30)
 
 
+def tournament_room(matches, players=2):
+    r, ps = swiping_room(players)
+    for _ in range(matches):
+        vote_all(r, ps, players)
+    if matches < 4:
+        r.start_tournament(ps[0].id, 1)
+    return r, ps
+
+
+def pair_ids(r):
+    return tuple(m.id for m in r.pair)
+
+
+class Tournament(unittest.TestCase):
+    def test_bracket_four(self):
+        r, (a, b) = tournament_room(4)
+        self.assertEqual(r.phase, "tournament")
+        self.assertEqual(pair_ids(r), (1, 2))
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Semi-final 1 of 2")
+        r.vote(a.id, 1, 1); r.vote(b.id, 1, 1)
+        self.assertEqual(pair_ids(r), (3, 4))
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Semi-final 2 of 2")
+        r.vote(a.id, 4, 1); r.vote(b.id, 4, 1)
+        self.assertEqual(pair_ids(r), (1, 4))
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Final")
+        r.vote(a.id, 4, 1); r.vote(b.id, 4, 1)
+        self.assertEqual(r.phase, "winner")
+        self.assertEqual(r.winner.id, 4)
+        self.assertEqual(r.state_for(a.id, 1)["winner"]["title"], "M4")
+
+    def test_bracket_three_bye_goes_to_highest_rated(self):
+        r, (a, b) = tournament_room(3)       # ratings M1 7.1, M2 7.2, M3 7.3
+        self.assertEqual(pair_ids(r), (1, 2))
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Semi-final")
+        r.vote(a.id, 1, 1); r.vote(b.id, 1, 1)
+        self.assertEqual(pair_ids(r), (1, 3))
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Final")
+
+    def test_bracket_two_is_final(self):
+        r, (a, b) = tournament_room(2)
+        self.assertEqual(pair_ids(r), (1, 2))
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Final")
+
+    def test_one_match_wins_directly(self):
+        r, (a, b) = tournament_room(1)
+        self.assertEqual(r.phase, "winner")
+        self.assertEqual(r.winner.id, 1)
+
+    def test_start_tournament_needs_a_match(self):
+        r, (a, b) = swiping_room(2)
+        with self.assertRaises(GameError) as e:
+            r.start_tournament(a.id, 1)
+        self.assertEqual(e.exception.status, 409)
+        with self.assertRaises(GameError) as e:
+            r.start_tournament(b.id, 1)
+        self.assertEqual(e.exception.status, 403)
+
+    def test_tie_goes_to_higher_rating(self):
+        r, (a, b) = tournament_room(2)       # M1 7.1 vs M2 7.2
+        r.vote(a.id, 1, 1); r.vote(b.id, 2, 1)
+        self.assertEqual(r.winner.id, 2)
+
+    def test_vote_is_idempotent(self):
+        r, (a, b) = tournament_room(2)
+        r.vote(a.id, 1, 1); r.vote(a.id, 2, 1)
+        s = r.state_for(a.id, 1)
+        self.assertEqual((s["my_vote"], s["voted"], s["of"]), (2, 1, 2))
+        with self.assertRaises(GameError) as e:
+            r.vote(a.id, 99, 1)
+        self.assertEqual(e.exception.status, 400)
+
+    def test_late_joiner_votes_in_tournament(self):
+        r, (a, b) = tournament_room(2)
+        late = r.add_player("late", 1)
+        r.vote(a.id, 1, 1); r.vote(b.id, 1, 1)
+        self.assertEqual(r.phase, "tournament")
+        r.vote(late.id, 2, 1)
+        self.assertEqual(r.winner.id, 1)
+
+    def test_close_any_phase_host_only(self):
+        r, (a, b) = tournament_room(2)
+        with self.assertRaises(GameError):
+            r.close(b.id, 1)
+        r.close(a.id, 1)
+        self.assertEqual(r.phase, "closed")
+
+
 if __name__ == "__main__":
     unittest.main()
