@@ -29,13 +29,13 @@ button:focus-visible, input:focus-visible, .chip:focus-visible, .pick:focus-visi
 label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 input { font: inherit; width: 100%; min-height: 52px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line);
   background: var(--panel); color: var(--text); }
-input.code { font-size: 28px; letter-spacing: .35em; text-align: center; text-transform: uppercase; color: var(--gold); font-weight: 800; }
+input.code { font-size: 28px; letter-spacing: .2em; text-align: center; text-transform: uppercase; color: var(--gold); font-weight: 800; }
 
 .logo { font-size: 64px; text-align: center; margin-top: 8vh; }
 .attrib { font-size: 11px; color: var(--muted); text-align: center; }
 .attrib a { color: var(--muted); }
 
-.roomcode { font-size: 44px; font-weight: 850; letter-spacing: .25em; text-align: center; color: var(--gold); padding-left: .25em; }
+.roomcode { font-size: 40px; font-weight: 850; letter-spacing: .15em; text-align: center; color: var(--gold); padding-left: .15em; font-variant-numeric: tabular-nums; }
 .qr { width: 168px; height: 168px; margin: 0 auto; border-radius: 12px; background: #fff; padding: 8px; image-rendering: pixelated; }
 .players { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 8px 12px; border-radius: 999px; background: var(--panel);

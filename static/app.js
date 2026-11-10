@@ -134,16 +134,16 @@ function createScreen() {
 }
 
 function joinScreen(code) {
-  const codeIn = h("input", { id: "code", class: "code", maxlength: 4, autocomplete: "off", autocapitalize: "characters",
-    inputmode: "text", value: code, placeholder: "ABCD", "aria-label": "Room code" });
+  const codeIn = h("input", { id: "code", class: "code", maxlength: 12, autocomplete: "off", autocapitalize: "characters",
+    autocorrect: "off", spellcheck: "false", inputmode: "text", value: code, placeholder: "K7XQ2P", "aria-label": "Room code" });
   show(
     h("h2", {}, "Join a room"),
     h("label", { for: "code" }, "Room code"), codeIn,
     h("label", { for: "name" }, "Your name"), nameInput(),
     h("div", { class: "bottom" },
       h("button", { onclick: () => {
-        const c = codeIn.value.trim().toUpperCase();
-        if (!/^[A-Z]{4}$/.test(c)) return toast("The room code has 4 letters", true);
+        const c = codeIn.value.replace(/\s+/g, "").toUpperCase();
+        if (!/^[A-Z2-9]{6}$/.test(c)) return toast("The room code has 6 letters and numbers", true);
         const n = readName();
         if (n) enter(() => api("POST", `/api/rooms/${c}/join`, { name: n }));
       } }, "Join"),
@@ -324,7 +324,7 @@ function closedScreen() {
 }
 
 (function boot() {
-  const m = location.pathname.match(/^\/r\/([A-Za-z]{4})$/);
+  const m = location.pathname.match(/^\/r\/([A-Za-z2-9]{6})$/);
   const code = m ? m[1].toUpperCase() : null;
   if (session && (!code || code === session.code)) return poll();
   if (code) return joinScreen(code);

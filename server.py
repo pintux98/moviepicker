@@ -17,7 +17,8 @@ from tmdb import MAX_PAGE, Tmdb, build_batch
 
 clock = time.time
 STATIC = Path(__file__).resolve().parent / "static"
-CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"
+CODE_LEN = 6
 BODY_MAX = 2048
 CREATE_LIMIT, CREATE_WINDOW = 5, 600
 OPEN_PER_CLIENT = 2
@@ -67,9 +68,9 @@ class App:
             raise GameError("Too many new rooms, try again in a few minutes", 429)
         if len(self.rooms) >= MAX_ROOMS:
             raise GameError("Too many rooms open right now, try again later", 503)
-        code = "".join(secrets.choice(CODE_LETTERS) for _ in range(4))
+        code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LEN))
         while code in self.rooms:
-            code = "".join(secrets.choice(CODE_LETTERS) for _ in range(4))
+            code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LEN))
         room = Room(code, now)
         player = room.add_player(name, now)
         self.created[client] = recent + [now]
@@ -227,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self) -> None:
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
-        if path == "/" or re.fullmatch(r"/r/[A-Za-z]{4}", path):
+        if path == "/" or re.fullmatch(r"/r/[A-Za-z2-9]{6}", path):
             f = STATIC / "index.html"
         elif path.startswith("/static/"):
             f = (STATIC / path[len("/static/"):]).resolve()

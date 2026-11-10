@@ -210,10 +210,16 @@ class Api(ApiBase):
         self.assertEqual(self.call("GET", "/static/%2e%2e/server.py")[0], 404)
 
     def test_index_and_room_link_serve_page(self):
-        for path in ("/", "/r/ABCD"):
+        for path in ("/", "/r/K7XQ2P", "/r/k7xq2p"):
             s, body = self.call("GET", path)
             self.assertEqual(s, 200)
             self.assertIn("Moviepicker", body)
+
+    def test_room_code_is_six_letters_and_digits(self):
+        codes = {self.create(ip="10.0.0.%d" % i)[0] for i in range(1, 30)}
+        for code in codes:
+            self.assertRegex(code, r"^[A-Z2-9]{6}$")
+        self.assertTrue(any(c.isdigit() for c in "".join(codes)))
 
     def test_icons(self):
         for path in ("/favicon.ico", "/apple-touch-icon.png", "/static/favicon.svg"):
