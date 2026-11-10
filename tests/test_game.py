@@ -78,6 +78,30 @@ class Basics(unittest.TestCase):
             r.add_player("late", 2 * IDLE_CLOSE)
         self.assertEqual(e.exception.status, 404)
 
+    def test_nickname_control_chars_stripped(self):
+        r = Room("ABCD", 0)
+        self.assertEqual(r.add_player("a\u202eb\x00\nc", 0).name, "abc")
+        with self.assertRaises(GameError) as e:
+            r.add_player("\u202e\x00", 0)
+        self.assertEqual(e.exception.status, 400)
+
+    def test_duplicate_name_rejected(self):
+        r = Room("ABCD", 0)
+        r.add_player("Bob", 0)
+        with self.assertRaises(GameError) as e:
+            r.add_player(" bob ", 0)
+        self.assertEqual(e.exception.status, 409)
+
+    def test_leave_frees_slot_and_hands_off_host(self):
+        r, ps = room_with(MAX_PLAYERS)
+        r.leave(ps[0].id, 1)
+        self.assertEqual(len(r.players), MAX_PLAYERS - 1)
+        self.assertEqual(r.host_id, ps[1].id)
+        r.add_player("new", 1)
+        with self.assertRaises(GameError) as e:
+            r.state_for(ps[0].id, 1)
+        self.assertEqual(e.exception.status, 403)
+
     def test_rejected_calls_do_not_count_as_activity(self):
         r, (a,) = room_with(1)
         for call in (lambda: r.start("intruder", 500), lambda: r.add_player("", 500)):

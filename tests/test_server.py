@@ -127,12 +127,71 @@ class Api(ApiBase):
         s, d = self.call("POST", "/api/rooms/ZZZZ/join", {"name": "Bob"})
         self.assertEqual((s, d["error"]), (404, "This room is closed"))
 
-    def test_rate_limit_rooms(self):
-        for _ in range(5):
+    def test_open_rooms_per_ip_capped(self):
+        for _ in range(2):
             self.create(ip="1.2.3.4")
         s, d = self.call("POST", "/api/rooms", {"name": "x"}, ip="1.2.3.4")
         self.assertEqual(s, 429)
         self.create(ip="5.6.7.8")
+
+    def test_ipv6_bucketed_by_64(self):
+        self.create(ip="2001:db8:0:1::1")
+        self.create(ip="2001:db8:0:1::2")
+        self.assertEqual(self.call("POST", "/api/rooms", {"name": "x"}, ip="2001:db8:0:1::3")[0], 429)
+        self.create(ip="2001:db8:0:2::1")
+
+    def test_room_guessing_rate_limited(self):
+        code, a = self.create(ip="7.7.7.7")
+        for i in range(20):
+            self.assertEqual(self.call("POST", "/api/rooms/QQQ%s/join" % "ABCDEFGHJKLMNPQRSTUV"[i], {"name": "g"}, ip="6.6.6.6")[0], 404)
+        self.assertEqual(self.call("POST", "/api/rooms/%s/join" % code, {"name": "g"}, ip="6.6.6.6")[0], 429)
+        self.assertEqual(self.call("POST", "/api/rooms/%s/join" % code, {"name": "ok"}, ip="8.8.8.8")[0], 200)
+
+    def test_unknown_genres_rejected(self):
+        code, a = self.create()
+        for ids in ([10 ** 30], [99999], [-5]):
+            self.assertEqual(self.act(code, a, type="genres", ids=ids)[0], 400, ids)
+        self.assertEqual(self.act(code, a, type="genres", ids=[16])[0], 200)
+
+    def test_leave_action(self):
+        code, a = self.create()
+        s, j = self.call("POST", "/api/rooms/%s/join" % code, {"name": "Bob"})
+        self.assertEqual(self.act(code, j["pid"], type="leave")[0], 200)
+        self.assertEqual(self.state(code, j["pid"])[0], 404)
+        self.assertEqual(len(self.state(code, a)[1]["players"]), 1)
+
+    def test_content_length_tricks_400(self):
+        for cl in ("-1", "abc"):
+            c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.putrequest("POST", "/api/rooms")
+            c.putheader("Content-Type", "application/json")
+            c.putheader("Content-Length", cl)
+            c.endheaders()
+            c.send(b'{"name": "x"}')
+            self.assertEqual(c.getresponse().status, 400, cl)
+            c.close()
+
+    def test_post_requires_json_content_type(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", "/api/rooms", body=b'{"name": "x"}', headers={"Content-Type": "text/plain"})
+        self.assertEqual(c.getresponse().status, 415)
+        c.close()
+
+    def test_handler_has_socket_timeout(self):
+        self.assertEqual(server.Handler.timeout, 15)
+
+    def test_refill_stops_after_tmdb_page_limit(self):
+        app = self.srv.RequestHandlerClass.app
+        code, a = self.create()
+        self.act(code, a, type="start")
+        self.act(code, a, type="start")
+        time.sleep(0.3)
+        with app.lock:
+            room = app.rooms[code]
+            app.meta[code]["page"] = 501
+            room.deck = room.deck[:1]
+            app.maybe_refill(room, server.clock())
+            self.assertFalse(app.meta[code]["refilling"])
 
     def test_room_full_409(self):
         code, a = self.create()
@@ -160,9 +219,9 @@ class Api(ApiBase):
         for path in ("/favicon.ico", "/apple-touch-icon.png", "/static/favicon.svg"):
             self.assertEqual(self.call("GET", path)[0], 200, path)
 
-    def test_unknown_player_403(self):
+    def test_non_member_gets_404_like_unknown_room(self):
         code, a = self.create()
-        self.assertEqual(self.state(code, "nobody")[0], 403)
+        self.assertEqual(self.state(code, "nobody")[0], 404)
 
 
 class ApiTmdbDown(ApiBase):

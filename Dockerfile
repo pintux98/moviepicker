@@ -1,4 +1,5 @@
-FROM python:3.13-alpine
+# python:3.13-alpine, pinned by digest (bump on purpose: docker pull python:3.13-alpine, copy the new digest)
+FROM python:3.13-alpine@sha256:1e1f6334529d1fb26a2ef619d7cffb30a7c7d7cc1cc7338ebee283a58d1aeaca
 WORKDIR /app
 COPY game.py tmdb.py server.py ./
 COPY static ./static

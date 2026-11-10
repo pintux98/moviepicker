@@ -1,10 +1,11 @@
 """Moviepicker room rules. Pure logic: no I/O, the caller passes `now` (seconds)."""
 import math
 import secrets
+import unicodedata
 from dataclasses import asdict, dataclass, field
 
 MAX_PLAYERS = 10
-MAX_ROOMS = 30
+MAX_ROOMS = 500       # a room is a few KB; high so a flood can't lock everyone out (per-IP cap in server.py)
 IDLE_CLOSE = 600      # seconds without any player action -> room closes
 AWAY = 60             # seconds without polling -> player stops counting
 SHORTLIST_SIZE = 4    # matches that start the tournament
@@ -47,6 +48,13 @@ class GameError(Exception):
     def __init__(self, message: str, status: int):
         super().__init__(message)
         self.status = status
+
+
+def clean_name(name) -> str:
+    """Nickname as shown to others: no control/format characters (RTL overrides, NUL, newlines), max 20."""
+    if not isinstance(name, str):
+        return ""
+    return "".join(c for c in name if not unicodedata.category(c).startswith("C")).strip()[:NAME_MAX]
 
 
 def threshold(n: int, relaxed: bool) -> int:
@@ -102,9 +110,11 @@ class Room:
     # --- players -------------------------------------------------------------
     def add_player(self, name: str, now: float) -> Player:
         self._open()
-        name = (name or "").strip()[:NAME_MAX] if isinstance(name, str) else ""
+        name = clean_name(name)
         if not name:
             raise GameError("Pick a name", 400)
+        if any(p.name.casefold() == name.casefold() for p in self.players.values()):
+            raise GameError("Someone already has that name", 409)
         if len(self.players) >= MAX_PLAYERS:
             raise GameError("Room is full", 409)
         if self.phase == "winner":
@@ -115,6 +125,21 @@ class Room:
         if self.host_id is None:
             self.host_id = p.id
         return p
+
+    def leave(self, pid: str, now: float) -> None:
+        """Player leaves for good: frees the slot; the host role moves to the next player."""
+        self._act(pid, now)
+        del self.players[pid]
+        self.pair_votes.pop(pid, None)
+        if self.host_id == pid:
+            rest = sorted(self.players.values(), key=lambda p: p.joined)
+            self.host_id = rest[0].id if rest else None
+        if not self.players:
+            self.phase = "closed"
+        elif self.phase == "swiping":
+            self._resolve(now)
+        elif self.phase == "tournament":
+            self._resolve_pair(now)
 
     def seen(self, pid: str, now: float) -> None:
         self._player(pid).last_seen = now

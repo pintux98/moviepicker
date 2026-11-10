@@ -11,6 +11,8 @@ from game import Movie
 API = "https://api.themoviedb.org/3/"
 IMG = "https://image.tmdb.org/t/p/w500"
 CACHE_TTL = 6 * 3600
+CACHE_MAX = 3000
+MAX_PAGE = 500   # TMDB discover stops at page 500
 ANIMATION, FAMILY = 16, 10751
 STUDIOS = [3, 2, 521]  # Pixar, Walt Disney Animation Studios, DreamWorks Animation
 BATCH = 20
@@ -21,8 +23,7 @@ class Tmdb:
         self.token = token
         self.fetch = fetch or self._http
         self.today = today
-        # ponytail: unbounded dict cache, fine for a few rooms a night; add LRU if memory ever grows
-        self.cache: dict = {}
+        self.cache: dict = {}  # bounded by CACHE_MAX, oldest entries dropped first
 
     def _http(self, path: str, params: dict) -> dict:
         req = urllib.request.Request(API + path + "?" + urllib.parse.urlencode(params),
@@ -36,8 +37,14 @@ class Tmdb:
         if hit and time.time() - hit[0] < CACHE_TTL:
             return hit[1]
         data = self.fetch(path, params)
-        self.cache[key] = (time.time(), data)
+        self._put(key, data)
         return data
+
+    def _put(self, key, data) -> None:
+        self.cache.pop(key, None)
+        while len(self.cache) >= CACHE_MAX:
+            self.cache.pop(next(iter(self.cache)))  # dicts keep insertion order: oldest first
+        self.cache[key] = (time.time(), data)
 
     def genres(self) -> list[dict]:
         return self._get("genre/movie/list", {"language": "en-US"})["genres"]
@@ -53,10 +60,15 @@ class Tmdb:
         return [_movie(r) for r in self._get("discover/movie", params).get("results", [])]
 
     def details(self, m: Movie) -> Movie:
-        d = self._get("movie/%d" % m.id, {"language": "en-US", "append_to_response": "watch/providers"})
-        m.runtime = d.get("runtime") or None
+        key = ("details", m.id)
+        hit = self.cache.get(key)
+        if hit and time.time() - hit[0] < CACHE_TTL:
+            m.runtime, m.provider = hit[1]
+            return m
+        d = self.fetch("movie/%d" % m.id, {"language": "en-US", "append_to_response": "watch/providers"})
         flat = ((d.get("watch/providers") or {}).get("results", {}).get("RO") or {}).get("flatrate") or []
-        m.provider = flat[0]["provider_name"] if flat else None
+        m.runtime, m.provider = d.get("runtime") or None, flat[0]["provider_name"] if flat else None
+        self._put(key, (m.runtime, m.provider))  # keep 2 fields, not the whole response (all countries)
         return m
 
 

@@ -2,6 +2,7 @@
 
 Env: TMDB_TOKEN (required), PORT (default 8000).
 """
+import ipaddress
 import json
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -16,13 +17,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from game import MAX_ROOMS, GameError, Room
-from tmdb import Tmdb, build_batch
+from tmdb import MAX_PAGE, Tmdb, build_batch
 
 clock = time.time  # tests patch this
 STATIC = Path(__file__).resolve().parent / "static"
 CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
 BODY_MAX = 2048
-CREATE_LIMIT, CREATE_WINDOW = 5, 600
+CREATE_LIMIT, CREATE_WINDOW = 5, 600   # new rooms per client per 10 min
+OPEN_PER_CLIENT = 2                     # rooms one client may have open at once
+MISS_LIMIT, MISS_WINDOW = 20, 600       # wrong room codes per client per 10 min (stops code guessing)
 REFILL_NOTICE = "Couldn't load more movies, retrying…"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
@@ -35,7 +38,8 @@ class App:
         self.tmdb = tmdb
         self.rooms: dict[str, Room] = {}
         self.meta: dict[str, dict] = {}       # code -> {"seed", "page", "refilling"}
-        self.created: dict[str, list[float]] = {}
+        self.created: dict[str, list[float]] = {}   # client -> room creation times
+        self.misses: dict[str, list[float]] = {}    # client -> wrong-code times
         self.lock = threading.Lock()
 
     # --- rooms ---------------------------------------------------------------
@@ -45,18 +49,27 @@ class App:
             if room.phase == "closed":
                 del self.rooms[code]
                 self.meta.pop(code, None)
+        for log, window in ((self.created, CREATE_WINDOW), (self.misses, MISS_WINDOW)):
+            for k in [k for k, ts in log.items() if not ts or now - ts[-1] >= window]:
+                del log[k]
 
-    def room(self, code: str, now: float) -> Room:
+    def room(self, code: str, client: str, now: float, pid: str | None = None) -> Room:
+        """The room, if it exists and (when pid is given) pid is in it. Otherwise one 404 for both cases."""
         self.janitor(now)
-        code = code.strip().upper()
-        if code not in self.rooms:
+        misses = [t for t in self.misses.get(client, []) if now - t < MISS_WINDOW]
+        if len(misses) >= MISS_LIMIT:
+            raise GameError("Too many wrong room codes, try again in a few minutes", 429)
+        room = self.rooms.get(code.strip().upper())
+        if room is None or (pid is not None and pid not in room.players):
+            self.misses[client] = misses + [now]
             raise GameError("This room is closed", 404)
-        return self.rooms[code]
+        return room
 
-    def create(self, name, ip: str, now: float) -> dict:
+    def create(self, name, client: str, now: float) -> dict:
         self.janitor(now)
-        recent = [t for t in self.created.get(ip, []) if now - t < CREATE_WINDOW]
-        if len(recent) >= CREATE_LIMIT:
+        recent = [t for t in self.created.get(client, []) if now - t < CREATE_WINDOW]
+        if len(recent) >= CREATE_LIMIT or \
+                sum(m.get("owner") == client for m in self.meta.values()) >= OPEN_PER_CLIENT:
             raise GameError("Too many new rooms, try again in a few minutes", 429)
         if len(self.rooms) >= MAX_ROOMS:
             raise GameError("Too many rooms open right now, try again later", 503)
@@ -65,15 +78,20 @@ class App:
             code = "".join(secrets.choice(CODE_LETTERS) for _ in range(4))
         room = Room(code, now)
         player = room.add_player(name, now)
-        self.created[ip] = recent + [now]
+        self.created[client] = recent + [now]
         self.rooms[code] = room
-        self.meta[code] = {"seed": random.randrange(1 << 30), "page": 1, "refilling": False}
+        self.meta[code] = {"seed": random.randrange(1 << 30), "page": 1, "refilling": False, "owner": client}
         return {"code": code, "pid": player.id}
 
-    def action(self, room: Room, pid: str, body: dict, now: float) -> None:
+    def action(self, room: Room, pid: str, body: dict, now: float, genre_ids: set[int]) -> None:
         kind = body.get("type")
         if kind == "genres":
-            room.set_genres(pid, body.get("ids"), now)
+            ids = body.get("ids")
+            if isinstance(ids, list) and not set(i for i in ids if isinstance(i, int)) <= genre_ids:
+                raise GameError("Unknown genre", 400)
+            room.set_genres(pid, ids, now)
+        elif kind == "leave":
+            room.leave(pid, now)
         elif kind == "ready":
             room.set_ready(pid, now)
         elif kind == "start":
@@ -92,7 +110,7 @@ class App:
     # --- deck refill (TMDB calls happen outside the lock) ----------------------
     def maybe_refill(self, room: Room, now: float) -> None:
         meta = self.meta.get(room.code)
-        if meta and not meta["refilling"] and room.needs_cards(now):
+        if meta and not meta["refilling"] and meta["page"] <= MAX_PAGE and room.needs_cards(now):
             meta["refilling"] = True
             weights = room.genre_weights(now)
             exclude = {m.id for m in room.deck}
@@ -128,6 +146,7 @@ def _int(v) -> int:
 class Handler(BaseHTTPRequestHandler):
     server_version = "moviepicker"
     sys_version = ""
+    timeout = 15  # seconds; a stalled client can't hold a thread forever
     app: App  # set by make_server
 
     def log_message(self, *a):
@@ -149,7 +168,14 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(data).encode(), "application/json", {"Cache-Control": "no-store"})
 
     def _body(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            raise GameError("Send JSON", 415)  # also forces a CORS preflight for cross-site posts
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise GameError("Bad request", 400)
+        if n < 0:
+            raise GameError("Bad request", 400)
         if n > BODY_MAX:
             raise GameError("Request too big", 413)
         try:
@@ -160,8 +186,14 @@ class Handler(BaseHTTPRequestHandler):
             raise GameError("Bad request", 400)
         return data
 
-    def _ip(self) -> str:
-        return self.headers.get("CF-Connecting-IP") or self.client_address[0]
+    def _client(self) -> str:
+        """Who is asking, for rate limits: the visitor IP from Cloudflare; IPv6 grouped per /64."""
+        raw = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+        try:
+            ip = ipaddress.ip_address(raw.strip())
+        except ValueError:
+            return raw[:64]
+        return str(ipaddress.ip_network("%s/64" % ip, strict=False)) if ip.version == 6 else str(ip)
 
     def _api(self, method: str) -> None:
         app, now = self.app, clock()
@@ -171,18 +203,22 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/api/genres":
                 return self._json(200, app.tmdb.genres())
             body = self._body() if method == "POST" else {}
+            client = self._client()
+            # genre list comes from TMDB (cached); fetched before taking the lock
+            genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
             with app.lock:
                 if method == "POST" and path == "/api/rooms":
-                    return self._json(200, app.create(body.get("name"), self._ip(), now))
+                    return self._json(200, app.create(body.get("name"), client, now))
                 m = re.fullmatch(r"/api/rooms/([^/]+)(/join|/action)?", path)
                 if not m:
                     raise GameError("Not found", 404)
-                room = app.room(m.group(1), now)
+                member = None if m.group(2) == "/join" else pid
+                room = app.room(m.group(1), client, now, member)
                 if method == "POST" and m.group(2) == "/join":
                     p = room.add_player(body.get("name"), now)
                     out = {"code": room.code, "pid": p.id}
                 elif method == "POST" and m.group(2) == "/action":
-                    app.action(room, pid, body, now)
+                    app.action(room, pid, body, now, genre_ids)
                     out = {"ok": True}
                 elif method == "GET" and m.group(2) is None:
                     room.seen(pid, now)
@@ -195,7 +231,7 @@ class Handler(BaseHTTPRequestHandler):
         except GameError as e:
             self._json(e.status, {"error": str(e)})
         except Exception as e:
-            sys.stderr.write("error %s %s: %r\n" % (method, path, e))
+            sys.stderr.write("error %s %r: %r\n" % (method, path, e))  # %r: no forged log lines via %0a
             self._json(500, {"error": "Something went wrong"})
 
     def _static(self) -> None:

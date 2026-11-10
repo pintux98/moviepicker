@@ -1,5 +1,6 @@
 import unittest
 
+import tmdb
 from tmdb import Tmdb, build_batch
 
 
@@ -55,6 +56,22 @@ class TmdbClient(unittest.TestCase):
         t = Tmdb("t", fetch=f)
         t.genres(); t.genres()
         self.assertEqual(len(f.calls), 1)
+
+
+    def test_cache_bounded(self):
+        t = Tmdb("t", fetch=lambda path, params: {"x": 1})
+        for i in range(tmdb.CACHE_MAX + 50):
+            t._get("p", {"i": i})
+        self.assertLessEqual(len(t.cache), tmdb.CACHE_MAX)
+
+    def test_details_cache_keeps_only_what_we_use(self):
+        f = FakeFetch(discover=[result(1, [16])], details={"runtime": 96, "big": "x" * 1000,
+                      "watch/providers": {"results": {"RO": {"flatrate": [{"provider_name": "Netflix"}]}}}})
+        t = Tmdb("t", fetch=f)
+        m = t.discover([16], 1)[0]
+        t.details(m); t.details(m)
+        self.assertEqual(sum(1 for path, _ in f.calls if path.startswith("movie/")), 1)
+        self.assertNotIn("big", repr(t.cache))
 
 
 class Deck(unittest.TestCase):

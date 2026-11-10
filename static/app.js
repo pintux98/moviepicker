@@ -87,7 +87,10 @@ const runtime = (m) => (m ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2,
 const titleYear = (m) => (m.year ? `${m.title} (${m.year})` : m.title);
 const poster = (m, cls) => (m.poster ? h("img", { src: m.poster, alt: "", class: cls, loading: "eager" }) : h("div", { class: cls }));
 const provider = (m) => (m.provider ? h("span", { class: "badge" }, "on " + m.provider) : null);
-const leave = () => h("button", { class: "ghost", onclick: () => { setSession(null); homeScreen(); } }, "Leave room");
+const leave = () => h("button", { class: "ghost", onclick: async () => {
+  try { await api("POST", `/api/rooms/${session.code}/action`, { type: "leave" }); } catch {}
+  setSession(null); homeScreen();
+} }, "Leave room");
 
 function nameInput() {
   return h("input", { id: "name", maxlength: 20, autocomplete: "nickname", placeholder: "e.g. Alex", value: load("mp-name") || "" });
@@ -164,7 +167,9 @@ function qrImage(code) {
 
 function playerChips(s) {
   return h("div", { class: "players" }, s.players.map((p) =>
-    h("span", { class: "chip" + (p.away ? " away" : "") }, (p.host ? "⭐ " : "") + p.name + (p.ready && s.phase === "genres" ? " ✓" : ""))));
+    h("span", { class: "chip" + (p.host ? " host" : "") + (p.away ? " away" : "") },
+      p.host ? h("span", { class: "crown", title: "Host", "aria-label": "Host" }, "⭐") : null,
+      p.name, p.ready && s.phase === "genres" ? h("span", { class: "tick", "aria-label": "ready" }, "✓") : null)));
 }
 
 function lobbyScreen(s) {

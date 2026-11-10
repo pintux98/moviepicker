@@ -90,3 +90,5 @@ button.chip { min-height: 44px; padding: 0 14px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+.chip.host { border-color: var(--gold); }
+.chip .tick { color: var(--ok); font-weight: 800; }
