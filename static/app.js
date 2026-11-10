@@ -71,7 +71,7 @@ async function act(type, extra = {}) {
 function onState() {
   const s = state;
   if (s.last_match) {
-    if (seenMatch !== null && s.last_match.seq > seenMatch) toast(`💘 Match! ${s.last_match.title} · ${s.last_match.yes} of ${s.last_match.of} said yes`);
+    if (seenMatch !== null && s.last_match.seq > seenMatch) toast(`It's a match: ${s.last_match.title} (${s.last_match.yes} of ${s.last_match.of} said yes)`);
     seenMatch = s.last_match.seq;
   } else if (seenMatch === null) seenMatch = 0;
   const key = JSON.stringify(s) + "|" + lateGenresSent;
@@ -82,8 +82,28 @@ function onState() {
   ({ lobby: lobbyScreen, genres: genresScreen, swiping: swipeScreen, tournament: tournamentScreen, winner: winnerScreen })[s.phase]?.(s);
 }
 
+const SVG = "http://www.w3.org/2000/svg";
+const ICONS = {
+  x: "M6 6l12 12M18 6 6 18",
+  heart: "M12 20.5s-7.4-4.4-9.3-8.9A5.3 5.3 0 0 1 12 6.2a5.3 5.3 0 0 1 9.3 5.4c-1.9 4.5-9.3 8.9-9.3 8.9z",
+  star: "M12 2.8l2.8 5.8 6.4.9-4.6 4.5 1.1 6.3L12 17.3l-5.7 3 1.1-6.3-4.6-4.5 6.4-.9z",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+};
+function icon(name) {
+  const s = document.createElementNS(SVG, "svg");
+  s.setAttribute("viewBox", "0 0 24 24");
+  s.setAttribute("aria-hidden", "true");
+  s.setAttribute("class", "icon icon-" + name);
+  const p = document.createElementNS(SVG, "path");
+  p.setAttribute("d", ICONS[name]);
+  s.append(p);
+  return s;
+}
+const brand = (cls) => h("img", { class: "brand " + cls, src: "/static/favicon.svg", alt: "" });
 const runtime = (m) => (m ? h("span", {}, `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`) : null);
-const stars = (m) => h("span", {}, `⭐ ${Number(m.rating).toFixed(1)}`);
+const stars = (m) => h("span", { class: "rating" }, icon("star"), Number(m.rating).toFixed(1));
+const watchLink = (m) => h("a", { class: "watch-link", href: `https://www.themoviedb.org/movie/${encodeURIComponent(m.id)}/watch?locale=RO`,
+  target: "_blank", rel: "noopener noreferrer" }, "Where to watch");
 const titleYear = (m) => (m.year ? `${m.title} (${m.year})` : m.title);
 const poster = (m, cls) => (m.poster ? h("img", { src: m.poster, alt: "", class: cls, loading: "eager" }) : h("div", { class: cls }));
 const framedPoster = (m, cls) => h("div", { class: "frame " + cls },
@@ -132,10 +152,11 @@ function openSheet(m) {
     h("h2", {}, titleYear(m)),
     h("div", { class: "meta center" }, stars(m), runtime(m.runtime), provider(m)),
     h("p", { class: "overview full" }, m.overview),
-    h("div", { class: "stats" },
+    m.picked === undefined ? null : h("div", { class: "stats" },
       h("div", { class: "stat" }, h("b", {}, m.picked), "picked"),
-      h("div", { class: "stat" }, h("b", {}, m.likes), "👍"),
-      h("div", { class: "stat" }, h("b", {}, m.dislikes), "👎")),
+      h("div", { class: "stat" }, h("b", {}, m.likes), "liked"),
+      h("div", { class: "stat" }, h("b", {}, m.dislikes), "skipped")),
+    watchLink(m),
     h("button", { class: "alt", onclick: () => close() }, "Close"));
   const back = h("div", { class: "backdrop", onclick: (e) => { if (e.target === back) close(); } }, sheet);
   let y0 = null;
@@ -155,25 +176,26 @@ function statsSection(stats) {
       h("span", { class: "muted left" }, `picked ${m.picked}×` + (m.dislikes ? ` · skipped ${m.dislikes}×` : ""))));
   const tile = (m) => h("button", { class: "strip-item", onclick: () => openSheet(m), "aria-label": titleYear(m) }, poster(m, "strip-poster"));
   return h("section", { class: "stats-home" },
-    h("h3", {}, "🏆 Most picked"),
+    h("h3", {}, "Most picked"),
     h("div", { class: "rank-list" }, stats.top.map(row)),
-    h("h3", {}, "🕒 Picked lately"),
+    h("h3", {}, "Picked lately"),
     h("div", { class: "strip" }, stats.recent.map(tile)));
 }
 
 async function homeScreen() {
   history.replaceState(null, "", "/");
   const draw = (stats) => show(
-    h("div", { class: "hero" },
-      h("div", { class: "logo small-logo", "aria-hidden": "true" }, "🍿"),
+    h("div", { class: "hero" + (stats && stats.top.length ? " compact" : "") },
+      brand("hero-logo"),
       h("h1", {}, "Moviepicker"),
       h("p", { class: "muted" }, "Find a movie everyone wants to watch.")),
     statsSection(stats),
     h("div", { class: "bottom home-actions" },
-      h("button", { onclick: createScreen }, "New room"),
-      h("button", { class: "alt", onclick: () => joinScreen("") }, "Join a room"),
-      h("p", { class: "attrib" }, "This product uses the TMDB API but is not endorsed or certified by TMDB. Movie data from ",
-        h("a", { href: "https://www.themoviedb.org/", target: "_blank", rel: "noopener noreferrer" }, "themoviedb.org"), ".")));
+      h("div", { class: "row-2" },
+        h("button", { onclick: createScreen }, "New room"),
+        h("button", { class: "alt", onclick: () => joinScreen("") }, "Join"))),
+    h("p", { class: "attrib" }, "This product uses the TMDB API but is not endorsed or certified by TMDB. Movie data from ",
+      h("a", { href: "https://www.themoviedb.org/", target: "_blank", rel: "noopener noreferrer" }, "themoviedb.org"), "."));
   draw(null);
   fadeIn();
   try {
@@ -182,7 +204,12 @@ async function homeScreen() {
   } catch {}
 }
 
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches("main input")) $app.querySelector(".bottom button")?.click();
+});
+
 function createScreen() {
+  fadeIn();
   show(
     h("h2", {}, "New room"),
     h("label", { for: "name" }, "Your name"), nameInput(),
@@ -195,6 +222,7 @@ function createScreen() {
 function joinScreen(code) {
   const codeIn = h("input", { id: "code", class: "code", maxlength: 12, autocomplete: "off", autocapitalize: "characters",
     autocorrect: "off", spellcheck: "false", inputmode: "text", value: code, placeholder: "K7XQ2P", "aria-label": "Room code" });
+  fadeIn();
   show(
     h("h2", {}, "Join a room"),
     h("label", { for: "code" }, "Room code"), codeIn,
@@ -222,8 +250,9 @@ function qrImage(code) {
 function playerChips(s) {
   return h("div", { class: "players" }, s.players.map((p) =>
     h("span", { class: "chip" + (p.host ? " host" : "") + (p.away ? " away" : "") },
-      p.host ? h("span", { class: "crown", title: "Host", "aria-label": "Host" }, "⭐") : null,
-      p.name, p.ready && s.phase === "genres" ? h("span", { class: "tick", "aria-label": "ready" }, "✓") : null)));
+      p.host ? h("span", { class: "crown", title: "Host", "aria-label": "Host" }, icon("star")) : null,
+      h("span", {}, p.name),
+      p.ready && s.phase === "genres" ? h("span", { class: "tick", "aria-label": "ready" }, icon("check")) : null)));
 }
 
 function lobbyScreen(s) {
@@ -232,6 +261,13 @@ function lobbyScreen(s) {
     h("div", { class: "roomcode", "aria-label": "Room code " + s.code.split("").join(" ") }, s.code),
     qrImage(s.code),
     h("p", { class: "muted" }, "Scan the code or type it on the other phones."),
+    h("button", { class: "ghost share", onclick: async () => {
+      const url = location.origin + "/r/" + s.code;
+      try {
+        if (navigator.share) await navigator.share({ title: "Moviepicker", text: "Join my movie room: " + s.code, url });
+        else { await navigator.clipboard.writeText(url); toast("Invite link copied"); }
+      } catch {}
+    } }, "Share invite link"),
     playerChips(s),
     h("p", { class: "muted small" }, `${s.players.length} / ${s.max_players}`),
     h("div", { class: "bottom" },
@@ -266,10 +302,11 @@ function genresScreen(s) {
     genreChips(),
     playerChips(s),
     h("div", { class: "bottom" },
+      h("p", { class: "muted small" }, `${ready} of ${here.length} ready`),
       s.me.ready
-        ? h("button", { disabled: true }, `Ready ✓ · ${ready}/${here.length}`)
-        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, `Ready · ${ready}/${here.length}`),
-      s.host ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start swiping now") : null));
+        ? h("button", { disabled: true }, "Waiting for the others")
+        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, "I'm ready"),
+      s.host && here.length > 1 ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start without waiting") : null));
 }
 
 function lateGenresScreen() {
@@ -293,7 +330,12 @@ function matchesBar(s) {
     h("p", { class: "muted small" }, "At 4 matches you vote head-to-head."));
 }
 
-let lastCard = null;
+let lastCard = null, keyVote = null;
+document.addEventListener("keydown", (e) => {
+  if (!keyVote || !document.querySelector("main > .card") || document.querySelector(".backdrop")) return;
+  if (e.key === "ArrowRight") keyVote(true);
+  else if (e.key === "ArrowLeft") keyVote(false);
+});
 function swipeScreen(s) {
   if (!s.me.ready && !lateGenresSent && !s.me.genres.length) return lateGenresScreen();
   const notice = s.notice ? h("p", { class: "notice" }, s.notice) : null;
@@ -301,10 +343,13 @@ function swipeScreen(s) {
     ? h("button", { class: "ghost vote-now", onclick: () => {
         const n = s.shortlist.length;
         if (confirm(`Start the vote with ${n} match${n > 1 ? "es" : ""}?`)) act("start_tournament");
-      } }, `Vote now with ${s.shortlist.length} →`) : null;
+      } }, `Vote now (${s.shortlist.length})`) : null;
+  const topbar = h("div", { class: "topbar" },
+    h("span", { class: "code-chip", "aria-label": "Room code " + s.code.split("").join(" ") }, "Room ", h("b", {}, s.code)),
+    hostVote);
   if (!s.cards.length) {
-    return show(notice, hostVote,
-      h("div", { class: "logo spin", "aria-hidden": "true" }, s.loading ? "🍿" : "⏳"),
+    return show(topbar, notice,
+      h("div", { class: "wait-logo" }, brand(s.loading ? "loading" : "")),
       h("h2", {}, s.loading ? "Loading movies…" : "You're ahead!"),
       h("p", { class: "muted" }, s.loading ? "Picking movies for your genres." : "Waiting for the others to catch up."),
       matchesBar(s),
@@ -330,15 +375,16 @@ function swipeScreen(s) {
     card.style.opacity = "0";
     setTimeout(async () => { busy = false; await act("swipe", { index: m.index, yes }); }, 200);
   };
-  dragGesture(card, vote);
-  show(notice, hostVote, card,
+  dragGesture(card, vote, m);
+  keyVote = vote;
+  show(topbar, notice, card,
     h("div", { class: "votes" },
-      h("button", { class: "no", "aria-label": "No", onclick: () => vote(false) }, "👎"),
-      h("button", { class: "yes", "aria-label": "Yes", onclick: () => vote(true) }, "👍")),
+      h("button", { class: "no", "aria-label": "Skip", title: "Skip (← key)", onclick: () => vote(false) }, icon("x")),
+      h("button", { class: "yes", "aria-label": "I'd watch it", title: "I'd watch it (→ key)", onclick: () => vote(true) }, icon("heart"))),
     matchesBar(s));
 }
 
-function dragGesture(card, vote) {
+function dragGesture(card, vote, movie) {
   let x0 = null, dx = 0;
   card.addEventListener("pointerdown", (e) => {
     x0 = e.clientX; dx = 0; dragging = true;
@@ -357,6 +403,7 @@ function dragGesture(card, vote) {
     x0 = null; dragging = false;
     card.dataset.lean = "";
     if (Math.abs(dx) > 90) return vote(dx > 0);
+    if (Math.abs(dx) < 6) openSheet(movie);
     card.style.transition = "transform .2s ease-out";
     card.style.transform = "";
   };
@@ -407,11 +454,11 @@ function winnerScreen(s) {
   const m = s.winner;
   if (celebrated !== s.code) { celebrated = s.code; confetti(); }
   show(h("div", { class: "stack winner pop" },
-      h("div", { class: "trophy", "aria-hidden": "true" }, "🏆"),
-      h("p", { class: "muted" }, "Tonight:"),
+      h("p", { class: "eyebrow" }, "Tonight's movie"),
       h("h1", {}, titleYear(m)),
       m.poster ? h("img", { src: m.poster, alt: "" }) : null,
-      m.provider ? provider(m) : h("p", { class: "muted" }, "Find it on your favorite service.")),
+      h("div", { class: "meta center" }, stars(m), runtime(m.runtime), provider(m)),
+      watchLink(m)),
     h("div", { class: "bottom" },
       s.host ? h("button", { onclick: () => act("close") }, "Close room") : null,
       leave()));
@@ -419,8 +466,9 @@ function winnerScreen(s) {
 
 function closedScreen() {
   history.replaceState(null, "", "/");
+  fadeIn();
   show(
-    h("div", { class: "logo", "aria-hidden": "true" }, "🍿"),
+    h("div", { class: "wait-logo" }, brand("")),
     h("h2", {}, "This room is closed"),
     h("p", { class: "muted" }, "The host closed it, or nobody did anything for 10 minutes."),
     h("div", { class: "bottom" }, h("button", { onclick: homeScreen }, "Back to start")));
