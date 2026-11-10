@@ -147,6 +147,12 @@ class Api(ApiBase):
         self.assertEqual(self.call("POST", "/api/rooms/%s/join" % code, {"name": "g"}, ip="6.6.6.6")[0], 429)
         self.assertEqual(self.call("POST", "/api/rooms/%s/join" % code, {"name": "ok"}, ip="8.8.8.8")[0], 200)
 
+    def test_polling_closed_rooms_never_locks_out_members(self):
+        code, a = self.create(ip="4.4.4.4")
+        for _ in range(25):
+            self.assertEqual(self.call("GET", "/api/rooms/ZZZZZZ", pid="x", ip="4.4.4.4")[0], 404)
+        self.assertEqual(self.call("GET", "/api/rooms/" + code, pid=a, ip="4.4.4.4")[0], 200)
+
     def test_unknown_genres_rejected(self):
         code, a = self.create()
         for ids in ([10 ** 30], [99999], [-5]):
@@ -184,7 +190,7 @@ class Api(ApiBase):
         app = self.srv.RequestHandlerClass.app
         code, a = self.create()
         self.act(code, a, type="start")
-        self.act(code, a, type="start")
+        self.act(code, a, type="force_start")
         time.sleep(0.3)
         with app.lock:
             room = app.rooms[code]
@@ -236,7 +242,7 @@ class ApiTmdbDown(ApiBase):
     def test_tmdb_failure_keeps_room_alive(self):
         code, a = self.create()
         self.act(code, a, type="start")
-        self.act(code, a, type="start")
+        self.act(code, a, type="force_start")
         d = self.wait_state(code, a, lambda d: d["notice"] == "Couldn't load more movies, retrying…")
         self.assertEqual(d["phase"], "swiping")
 

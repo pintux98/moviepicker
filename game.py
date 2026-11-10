@@ -129,10 +129,23 @@ class Room:
             self.host_id = rest[0].id if rest else None
         if not self.players:
             self.phase = "closed"
+        else:
+            self._progress(now)
+
+    def _progress(self, now: float) -> None:
+        if self.phase == "genres" and self._everyone_ready(now):
+            self._begin_swiping()
         elif self.phase == "swiping":
             self._resolve(now)
         elif self.phase == "tournament":
             self._resolve_pair(now)
+
+    def _everyone_ready(self, now: float) -> bool:
+        active = self.active(now)
+        return bool(active) and all(p.ready for p in active)
+
+    def _quorum(self, active: list[Player]) -> bool:
+        return len(active) >= min(2, len(self.players))
 
     def seen(self, pid: str, now: float) -> None:
         self._player(pid).last_seen = now
@@ -146,10 +159,7 @@ class Room:
         if now - self.last_action >= IDLE_CLOSE:
             self.phase = "closed"
             return
-        if self.phase == "swiping":
-            self._resolve(now)
-        elif self.phase == "tournament":
-            self._resolve_pair(now)
+        self._progress(now)
         host = self.players.get(self.host_id)
         if host is None or now - host.last_seen > AWAY:
             active = sorted(self.active(now), key=lambda p: p.joined)
@@ -161,16 +171,20 @@ class Room:
         self._host_only(pid)
         if self.phase == "lobby":
             self.phase = "genres"
-        elif self.phase == "genres":
+
+    def force_start(self, pid: str, now: float) -> None:
+        self._act(pid, now)
+        self._host_only(pid)
+        if self.phase == "genres":
             self._begin_swiping()
-        else:
-            raise GameError("Already started", 409)
 
     def set_genres(self, pid: str, genre_ids: list[int], now: float) -> None:
         p = self._act(pid, now)
         if self.phase not in ("lobby", "genres", "swiping"):
             raise GameError("Too late to change genres", 409)
-        if not isinstance(genre_ids, list) or len(genre_ids) > MAX_GENRES                 or not all(isinstance(g, int) and not isinstance(g, bool) for g in genre_ids):
+        valid = isinstance(genre_ids, list) and len(genre_ids) <= MAX_GENRES and all(
+            isinstance(g, int) and not isinstance(g, bool) for g in genre_ids)
+        if not valid:
             raise GameError("Bad genre list", 400)
         p.genres = sorted(set(genre_ids))
 
@@ -179,7 +193,7 @@ class Room:
         if self.phase != "genres":
             raise GameError("Not picking genres right now", 409)
         p.ready = True
-        if all(q.ready for q in self.active(now)):
+        if self._everyone_ready(now):
             self._begin_swiping()
 
     def _begin_swiping(self) -> None:
@@ -216,7 +230,7 @@ class Room:
         while self.phase == "swiping" and self.resolved < len(self.deck):
             active = self.active(now)
             votes = self.votes.get(self.resolved, {})
-            if not active or any(p.id not in votes for p in active):
+            if not self._quorum(active) or any(p.id not in votes for p in active):
                 return
             yes = sum(votes[p.id] for p in active)
             movie = self.deck[self.resolved]
@@ -268,11 +282,13 @@ class Room:
         m = self.current
         return (m["a"], m["b"]) if m else None
 
-    def vote(self, pid: str, movie_id: int, now: float) -> None:
+    def vote(self, pid: str, movie_id: int, now: float, match: int | None = None) -> None:
         self._act(pid, now)
         m = self.current
         if self.phase != "tournament" or m is None:
             raise GameError("No vote right now", 409)
+        if match is not None and match != self.matches.index(m):
+            return
         if movie_id not in (m["a"].id, m["b"].id):
             raise GameError("Pick one of the two movies", 400)
         self.pair_votes[pid] = movie_id
@@ -281,7 +297,7 @@ class Room:
     def _resolve_pair(self, now: float) -> None:
         m = self.current
         active = self.active(now)
-        if m is None or not active or any(p.id not in self.pair_votes for p in active):
+        if m is None or not self._quorum(active) or any(p.id not in self.pair_votes for p in active):
             return
         va = sum(self.pair_votes[p.id] == m["a"].id for p in active)
         vb = len(active) - va
@@ -339,6 +355,7 @@ class Room:
         active = self.active(now)
         return {
             "pair": [m["a"].public(), m["b"].public()] if m else None,
+            "match": self.matches.index(m) if m else None,
             "round_name": m["round"] if m else None,
             "my_vote": self.pair_votes.get(pid),
             "voted": sum(p.id in self.pair_votes for p in active),

@@ -52,6 +52,7 @@ async function poll() {
   } catch (e) {
     if (e.status === 404) { setSession(null); return closedScreen(); }
     if (e.status === 403) { setSession(null); return homeScreen(); }
+    if (e.status === 429) toast(e.message, true);
   }
   if (session && !document.hidden) timer = setTimeout(poll, POLL_MS);
 }
@@ -210,7 +211,7 @@ function genresScreen(s) {
       s.me.ready
         ? h("button", { disabled: true }, `Ready ✓ · ${ready}/${here.length}`)
         : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, `Ready · ${ready}/${here.length}`),
-      s.host && ready < here.length ? h("button", { class: "alt", onclick: () => act("start") }, "Start without waiting") : null));
+      s.host ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start swiping now") : null));
 }
 
 function lateGenresScreen() {
@@ -288,7 +289,12 @@ function dragGesture(card, vote) {
 function tournamentScreen(s) {
   if (!s.pair) return show(h("h2", {}, "Counting votes…"));
   const pick = (m) => h("button", { class: "pick" + (s.my_vote === m.id ? " mine" : ""), "aria-pressed": String(s.my_vote === m.id),
-      onclick: () => act("vote", { movie_id: m.id }) },
+      onclick: async () => {
+        if (busy) return;
+        busy = true;
+        await act("vote", { movie_id: m.id, match: s.match });
+        busy = false;
+      } },
     poster(m, "ph"),
     h("span", { class: "stack" }, h("strong", {}, titleYear(m)),
       h("span", { class: "meta" }, `⭐ ${m.rating.toFixed(1)}`, provider(m))));

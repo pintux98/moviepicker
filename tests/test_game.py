@@ -46,7 +46,32 @@ class Basics(unittest.TestCase):
     def test_host_can_force_swiping(self):
         r, (a, b) = room_with(2)
         r.start(a.id, 1)
-        r.start(a.id, 2)
+        r.force_start(a.id, 2)
+        self.assertEqual(r.phase, "swiping")
+
+    def test_double_tap_start_does_not_skip_genres(self):
+        r, (a, b) = room_with(2)
+        r.start(a.id, 1)
+        r.start(a.id, 1)
+        self.assertEqual(r.phase, "genres")
+
+    def test_genres_continue_when_unready_player_goes_away(self):
+        r, (a, b, c) = room_with(3)
+        r.start(a.id, 1)
+        r.set_ready(a.id, 1)
+        r.set_ready(b.id, 1)
+        now = AWAY + 2
+        r.seen(a.id, now)
+        r.seen(b.id, now)
+        r.tick(now)
+        self.assertEqual(r.phase, "swiping")
+
+    def test_genres_continue_when_unready_player_leaves(self):
+        r, (a, b, c) = room_with(3)
+        r.start(a.id, 1)
+        r.set_ready(a.id, 1)
+        r.set_ready(b.id, 1)
+        r.leave(c.id, 1)
         self.assertEqual(r.phase, "swiping")
 
     def test_away_player_not_counted_then_returns(self):
@@ -151,7 +176,7 @@ def movies(n, start=1):
 def swiping_room(n, cards=40):
     r, ps = room_with(n)
     r.start(ps[0].id, 0)
-    r.start(ps[0].id, 0)
+    r.force_start(ps[0].id, 0)
     r.add_cards(movies(cards))
     return r, ps
 
@@ -186,6 +211,16 @@ class Swiping(unittest.TestCase):
         vote_all(r, ps[:2], 2, now)
         self.assertEqual(r.resolved, 1)
         self.assertEqual(len(r.shortlist), 1)
+
+    def test_lone_player_cannot_decide_for_sleeping_partner(self):
+        r, (a, b) = swiping_room(2)
+        now = AWAY + 5
+        for i in range(MAX_LEAD):
+            r.seen(a.id, now)
+            r.swipe(a.id, i, True, now)
+            r.tick(now)
+        self.assertEqual(r.shortlist, [])
+        self.assertEqual(r.phase, "swiping")
 
     def test_swipe_is_idempotent(self):
         r, (a, b) = swiping_room(2)
@@ -318,6 +353,15 @@ class Tournament(unittest.TestCase):
         r, (a, b) = tournament_room(2)
         r.vote(a.id, 1, 1); r.vote(b.id, 2, 1)
         self.assertEqual(r.winner.id, 2)
+
+    def test_double_tap_vote_does_not_spill_into_next_pair(self):
+        r, (a, b) = tournament_room(3)
+        m = r.state_for(a.id, 1)["match"]
+        r.vote(a.id, 1, 1, m)
+        r.vote(b.id, 1, 1, m)
+        r.vote(b.id, 1, 1, m)
+        self.assertEqual(r.state_for(a.id, 1)["round_name"], "Final")
+        self.assertEqual(r.pair_votes, {})
 
     def test_vote_is_idempotent(self):
         r, (a, b) = tournament_room(2)

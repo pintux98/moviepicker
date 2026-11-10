@@ -49,13 +49,20 @@ class App:
             for k in [k for k, ts in log.items() if not ts or now - ts[-1] >= window]:
                 del log[k]
 
-    def room(self, code: str, client: str, now: float, pid: str | None = None) -> Room:
+    def room(self, code: str, now: float, pid: str) -> Room:
+        self.janitor(now)
+        room = self.rooms.get(code.strip().upper())
+        if room is None or pid not in room.players:
+            raise GameError("This room is closed", 404)
+        return room
+
+    def room_to_join(self, code: str, client: str, now: float) -> Room:
         self.janitor(now)
         misses = [t for t in self.misses.get(client, []) if now - t < MISS_WINDOW]
         if len(misses) >= MISS_LIMIT:
             raise GameError("Too many wrong room codes, try again in a few minutes", 429)
         room = self.rooms.get(code.strip().upper())
-        if room is None or (pid is not None and pid not in room.players):
+        if room is None:
             self.misses[client] = misses + [now]
             raise GameError("This room is closed", 404)
         return room
@@ -91,12 +98,15 @@ class App:
             room.set_ready(pid, now)
         elif kind == "start":
             room.start(pid, now)
+        elif kind == "force_start":
+            room.force_start(pid, now)
         elif kind == "swipe":
             room.swipe(pid, _int(body.get("index")), bool(body.get("yes")), now)
         elif kind == "start_tournament":
             room.start_tournament(pid, now)
         elif kind == "vote":
-            room.vote(pid, _int(body.get("movie_id")), now)
+            match = body.get("match")
+            room.vote(pid, _int(body.get("movie_id")), now, None if match is None else _int(match))
         elif kind == "close":
             room.close(pid, now)
         else:
@@ -204,8 +214,10 @@ class Handler(BaseHTTPRequestHandler):
                 m = re.fullmatch(r"/api/rooms/([^/]+)(/join|/action)?", path)
                 if not m:
                     raise GameError("Not found", 404)
-                member = None if m.group(2) == "/join" else pid
-                room = app.room(m.group(1), client, now, member)
+                if m.group(2) == "/join":
+                    room = app.room_to_join(m.group(1), client, now)
+                else:
+                    room = app.room(m.group(1), now, pid)
                 if method == "POST" and m.group(2) == "/join":
                     p = room.add_player(body.get("name"), now)
                     out = {"code": room.code, "pid": p.id}
