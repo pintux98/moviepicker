@@ -307,9 +307,11 @@ function genresScreen(s) {
   const ready = here.filter((p) => p.ready).length;
   show(
     h("h2", {}, "What are you in the mood for?"),
-    h("p", { class: "muted" }, "Pick as many as you like. None = anything goes."),
+    h("p", { class: "muted" }, "Pick as many as you like."),
     genreChips(),
-    playerChips(s),
+    h("section", { class: "people" },
+      h("h3", {}, "In this room"),
+      playerChips(s)),
     h("div", { class: "bottom" },
       h("p", { class: "muted small" }, `${ready} of ${here.length} ready`),
       s.me.ready
@@ -474,13 +476,8 @@ function winnerScreen(s) {
 }
 
 function closedScreen() {
-  history.replaceState(null, "", "/");
-  fadeIn();
-  show(
-    h("div", { class: "wait-logo" }, brand("")),
-    h("h2", {}, "This room is closed"),
-    h("p", { class: "muted" }, "The host closed it, or nobody did anything for 10 minutes."),
-    h("div", { class: "bottom" }, h("button", { onclick: homeScreen }, "Back to start")));
+  homeScreen();
+  toast("The room was closed");
 }
 
 (function boot() {

@@ -220,3 +220,5 @@ main.fade > *:nth-child(n+4) { animation-delay: .09s; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+.people { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.people h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--muted); text-align: center; }
