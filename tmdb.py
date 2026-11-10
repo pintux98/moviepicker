@@ -1,4 +1,3 @@
-"""TMDB client (cached) and the deck builder that orders movies for a room."""
 import datetime
 import json
 import random
@@ -12,9 +11,9 @@ API = "https://api.themoviedb.org/3/"
 IMG = "https://image.tmdb.org/t/p/w500"
 CACHE_TTL = 6 * 3600
 CACHE_MAX = 3000
-MAX_PAGE = 500   # TMDB discover stops at page 500
+MAX_PAGE = 500
 ANIMATION, FAMILY = 16, 10751
-STUDIOS = [3, 2, 521]  # Pixar, Walt Disney Animation Studios, DreamWorks Animation
+STUDIOS = [3, 2, 521]
 BATCH = 20
 
 
@@ -23,7 +22,7 @@ class Tmdb:
         self.token = token
         self.fetch = fetch or self._http
         self.today = today
-        self.cache: dict = {}  # bounded by CACHE_MAX, oldest entries dropped first
+        self.cache: dict = {}
 
     def _http(self, path: str, params: dict) -> dict:
         req = urllib.request.Request(API + path + "?" + urllib.parse.urlencode(params),
@@ -43,7 +42,7 @@ class Tmdb:
     def _put(self, key, data) -> None:
         self.cache.pop(key, None)
         while len(self.cache) >= CACHE_MAX:
-            self.cache.pop(next(iter(self.cache)))  # dicts keep insertion order: oldest first
+            self.cache.pop(next(iter(self.cache)))
         self.cache[key] = (time.time(), data)
 
     def genres(self) -> list[dict]:
@@ -68,7 +67,7 @@ class Tmdb:
         d = self.fetch("movie/%d" % m.id, {"language": "en-US", "append_to_response": "watch/providers"})
         flat = ((d.get("watch/providers") or {}).get("results", {}).get("RO") or {}).get("flatrate") or []
         m.runtime, m.provider = d.get("runtime") or None, flat[0]["provider_name"] if flat else None
-        self._put(key, (m.runtime, m.provider))  # keep 2 fields, not the whole response (all countries)
+        self._put(key, (m.runtime, m.provider))
         return m
 
 
@@ -81,7 +80,6 @@ def _movie(r: dict) -> Movie:
 
 
 def build_batch(t: Tmdb, weights: dict[int, int], exclude: set[int], seed: int, page: int) -> list[Movie]:
-    """Up to BATCH new movies for a room: more shared genres first, studio animation every 4th card."""
     rng = random.Random(seed + page)
     picked = sorted(g for g, w in weights.items() if w > 0)
     base = [m for m in t.discover(picked, page) if m.id not in exclude]

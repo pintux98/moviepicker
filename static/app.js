@@ -1,10 +1,9 @@
 "use strict";
-// Moviepicker phone UI. All user-provided text goes through textContent (h() below), never innerHTML.
 
 const $app = document.getElementById("app");
 const $toast = document.getElementById("toast");
 const POLL_MS = 1000;
-let session = load("mp");          // {code, pid}
+let session = load("mp");
 let state = null, lastKey = "", timer = null, seenMatch = null, genreList = null;
 let picked = null, lateGenresSent = false, busy = false, dragging = false;
 
@@ -44,7 +43,6 @@ function toast(msg, err = false) {
   toastTimer = setTimeout(() => ($toast.hidden = true), 2600);
 }
 
-// ---------- polling ----------
 async function poll() {
   clearTimeout(timer);
   if (!session) return;
@@ -54,7 +52,6 @@ async function poll() {
   } catch (e) {
     if (e.status === 404) { setSession(null); return closedScreen(); }
     if (e.status === 403) { setSession(null); return homeScreen(); }
-    // network hiccup: keep trying
   }
   if (session && !document.hidden) timer = setTimeout(poll, POLL_MS);
 }
@@ -82,7 +79,6 @@ function onState() {
   ({ lobby: lobbyScreen, genres: genresScreen, swiping: swipeScreen, tournament: tournamentScreen, winner: winnerScreen })[s.phase]?.(s);
 }
 
-// ---------- helpers ----------
 const runtime = (m) => (m ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : null);
 const titleYear = (m) => (m.year ? `${m.title} (${m.year})` : m.title);
 const poster = (m, cls) => (m.poster ? h("img", { src: m.poster, alt: "", class: cls, loading: "eager" }) : h("div", { class: cls }));
@@ -114,7 +110,6 @@ async function enter(promise) {
   busy = false;
 }
 
-// ---------- screens ----------
 function homeScreen() {
   history.replaceState(null, "", "/");
   show(
@@ -328,7 +323,6 @@ function closedScreen() {
     h("div", { class: "bottom" }, h("button", { onclick: homeScreen }, "Back to start")));
 }
 
-// ---------- boot ----------
 (function boot() {
   const m = location.pathname.match(/^\/r\/([A-Za-z]{4})$/);
   const code = m ? m[1].toUpperCase() : null;

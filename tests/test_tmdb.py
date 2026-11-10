@@ -57,7 +57,6 @@ class TmdbClient(unittest.TestCase):
         t.genres(); t.genres()
         self.assertEqual(len(f.calls), 1)
 
-
     def test_cache_bounded(self):
         t = Tmdb("t", fetch=lambda path, params: {"x": 1})
         for i in range(tmdb.CACHE_MAX + 50):

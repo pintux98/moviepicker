@@ -1,16 +1,15 @@
-"""Moviepicker room rules. Pure logic: no I/O, the caller passes `now` (seconds)."""
 import math
 import secrets
 import unicodedata
 from dataclasses import asdict, dataclass, field
 
 MAX_PLAYERS = 10
-MAX_ROOMS = 500       # a room is a few KB; high so a flood can't lock everyone out (per-IP cap in server.py)
-IDLE_CLOSE = 600      # seconds without any player action -> room closes
-AWAY = 60             # seconds without polling -> player stops counting
-SHORTLIST_SIZE = 4    # matches that start the tournament
-RELAX_AFTER = 25      # resolved cards in a row without a match -> majority counts
-MAX_LEAD = 15         # how far a player may swipe ahead of the group
+MAX_ROOMS = 500
+IDLE_CLOSE = 600
+AWAY = 60
+SHORTLIST_SIZE = 4
+RELAX_AFTER = 25
+MAX_LEAD = 15
 NAME_MAX = 20
 MAX_GENRES = 32
 
@@ -51,14 +50,12 @@ class GameError(Exception):
 
 
 def clean_name(name) -> str:
-    """Nickname as shown to others: no control/format characters (RTL overrides, NUL, newlines), max 20."""
     if not isinstance(name, str):
         return ""
     return "".join(c for c in name if not unicodedata.category(c).startswith("C")).strip()[:NAME_MAX]
 
 
 def threshold(n: int, relaxed: bool) -> int:
-    """Yes-votes a card needs to be a match with n active players."""
     if n <= 2:
         return n
     if relaxed:
@@ -74,28 +71,26 @@ class Room:
         self.host_id: str | None = None
         self.last_action = now
         self.deck: list[Movie] = []
-        self.votes: dict[int, dict[str, bool]] = {}   # card index -> player id -> yes
-        self.resolved = 0                               # cards decided so far, in order
+        self.votes: dict[int, dict[str, bool]] = {}
+        self.resolved = 0
         self.shortlist: list[Movie] = []
         self.relaxed = False
         self.no_match_streak = 0
         self.notice: str | None = None
         self.last_match: dict | None = None
-        self.matches: list[dict] = []        # {"a", "b": Movie, "round": str, "winner": Movie | None}
+        self.matches: list[dict] = []
         self.bye: Movie | None = None
-        self.pair_votes: dict[str, int] = {}  # player id -> movie id, current pair only
+        self.pair_votes: dict[str, int] = {}
         self.winner: Movie | None = None
 
-    # --- helpers -------------------------------------------------------------
     def _player(self, pid: str) -> Player:
         if pid not in self.players:
             raise GameError("You're not in this room", 403)
         return self.players[pid]
 
     def _act(self, pid: str, now: float) -> Player:
-        """Every player action: room must be open; only authenticated calls count as activity."""
         self._open()
-        p = self._player(pid)  # raises 403 before anything is written
+        p = self._player(pid)
         p.last_seen = self.last_action = now
         return p
 
@@ -107,7 +102,6 @@ class Room:
         if pid != self.host_id:
             raise GameError("Only the host can do that", 403)
 
-    # --- players -------------------------------------------------------------
     def add_player(self, name: str, now: float) -> Player:
         self._open()
         name = clean_name(name)
@@ -119,7 +113,7 @@ class Room:
             raise GameError("Room is full", 409)
         if self.phase == "winner":
             raise GameError("This room already picked its movie", 409)
-        self.last_action = now  # only a successful join counts as activity
+        self.last_action = now
         p = Player(secrets.token_urlsafe(8), name, now, now, cursor=self.resolved)
         self.players[p.id] = p
         if self.host_id is None:
@@ -127,7 +121,6 @@ class Room:
         return p
 
     def leave(self, pid: str, now: float) -> None:
-        """Player leaves for good: frees the slot; the host role moves to the next player."""
         self._act(pid, now)
         del self.players[pid]
         self.pair_votes.pop(pid, None)
@@ -154,7 +147,7 @@ class Room:
             self.phase = "closed"
             return
         if self.phase == "swiping":
-            self._resolve(now)  # someone going away can complete a card
+            self._resolve(now)
         elif self.phase == "tournament":
             self._resolve_pair(now)
         host = self.players.get(self.host_id)
@@ -163,7 +156,6 @@ class Room:
             if active:
                 self.host_id = active[0].id
 
-    # --- lobby / genres --------------------------------------------------------
     def start(self, pid: str, now: float) -> None:
         self._act(pid, now)
         self._host_only(pid)
@@ -193,7 +185,6 @@ class Room:
     def _begin_swiping(self) -> None:
         self.phase = "swiping"
 
-    # --- swiping -------------------------------------------------------------
     def add_cards(self, movies: list[Movie]) -> None:
         have = {m.id for m in self.deck}
         for m in movies:
@@ -205,7 +196,7 @@ class Room:
         return max(p.cursor, self.resolved)
 
     def needs_cards(self, now: float) -> bool:
-        if self.phase != "swiping":  # not before genres are picked, or the deck ignores them
+        if self.phase != "swiping":
             return False
         cursors = [self._cursor(p) for p in self.active(now)] or [self.resolved]
         return max(cursors) + 10 >= len(self.deck)
@@ -216,13 +207,12 @@ class Room:
             raise GameError("Not swiping right now", 409)
         c = self._cursor(p)
         if index != c or c >= len(self.deck) or c >= self.resolved + MAX_LEAD:
-            return  # double tap, stale screen or too far ahead: ignore
+            return
         self.votes.setdefault(c, {})[pid] = bool(yes)
         p.cursor = c + 1
         self._resolve(now)
 
     def _resolve(self, now: float) -> None:
-        """Decide cards in order once every active player has voted on them."""
         while self.phase == "swiping" and self.resolved < len(self.deck):
             active = self.active(now)
             votes = self.votes.get(self.resolved, {})
@@ -243,7 +233,6 @@ class Room:
                     self.relaxed = True
                     self.notice = "Loosening up: majority now counts"
 
-    # --- tournament ------------------------------------------------------------
     def start_tournament(self, pid: str, now: float) -> None:
         self._act(pid, now)
         self._host_only(pid)
@@ -299,7 +288,7 @@ class Room:
         order = [x.id for x in self.shortlist]
         if va != vb:
             m["winner"] = m["a"] if va > vb else m["b"]
-        else:  # tie: higher rating, then the earlier match
+        else:
             m["winner"] = max((m["a"], m["b"]), key=lambda x: (x.rating, -order.index(x.id)))
         self.pair_votes = {}
         if self.current is not None:
@@ -326,7 +315,6 @@ class Room:
         self._host_only(pid)
         self.phase = "closed"
 
-    # --- view --------------------------------------------------------------
     def state_for(self, pid: str, now: float) -> dict:
         me = self._player(pid)
         return {

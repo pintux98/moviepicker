@@ -68,10 +68,10 @@ class Basics(unittest.TestCase):
         r.seen(a.id, IDLE_CLOSE - 1)
         r.tick(IDLE_CLOSE - 1)
         self.assertEqual(r.phase, "lobby")
-        r.start(a.id, IDLE_CLOSE - 1)  # an action resets the clock
+        r.start(a.id, IDLE_CLOSE - 1)
         r.tick(2 * IDLE_CLOSE - 2)
         self.assertEqual(r.phase, "genres")
-        r.seen(a.id, 2 * IDLE_CLOSE)  # polling alone doesn't keep it alive
+        r.seen(a.id, 2 * IDLE_CLOSE)
         r.tick(2 * IDLE_CLOSE)
         self.assertEqual(r.phase, "closed")
         with self.assertRaises(GameError) as e:
@@ -112,9 +112,9 @@ class Basics(unittest.TestCase):
 
     def test_genres_only_before_tournament(self):
         r, ps = room_with(2)
-        r.set_genres(ps[0].id, [16], 1)           # lobby ok
+        r.set_genres(ps[0].id, [16], 1)
         r.start(ps[0].id, 1); r.start(ps[0].id, 1)
-        r.set_genres(ps[1].id, [35], 1)           # swiping ok (late joiners)
+        r.set_genres(ps[1].id, [35], 1)
         r.phase = "tournament"
         with self.assertRaises(GameError) as e:
             r.set_genres(ps[0].id, [28], 1)
@@ -157,7 +157,6 @@ def swiping_room(n, cards=40):
 
 
 def vote_all(r, ps, yes_count, now=1.0):
-    """Everyone in ps votes on their current card; the first yes_count say yes."""
     for i, p in enumerate(ps):
         r.swipe(p.id, max(p.cursor, r.resolved), i < yes_count, now)
 
@@ -236,7 +235,7 @@ class Swiping(unittest.TestCase):
             vote_all(r, ps, 0)
         late = r.add_player("late", 1)
         self.assertEqual(late.cursor, 7)
-        vote_all(r, ps, 4)          # 4 of 5 yes, threshold(5) = 4 -> match only once late votes too
+        vote_all(r, ps, 4)
         self.assertEqual(r.resolved, 7)
         r.swipe(late.id, 7, False, 1)
         self.assertEqual(r.resolved, 8)
@@ -254,7 +253,7 @@ class Swiping(unittest.TestCase):
         self.assertTrue(r.needs_cards(1))
         r.add_cards(movies(18, start=13))
         self.assertFalse(r.needs_cards(1))
-        r.add_cards(movies(5, start=1))  # duplicates ignored
+        r.add_cards(movies(5, start=1))
         self.assertEqual(len(r.deck), 30)
 
 
@@ -289,7 +288,7 @@ class Tournament(unittest.TestCase):
         self.assertEqual(r.state_for(a.id, 1)["winner"]["title"], "M4")
 
     def test_bracket_three_bye_goes_to_highest_rated(self):
-        r, (a, b) = tournament_room(3)       # ratings M1 7.1, M2 7.2, M3 7.3
+        r, (a, b) = tournament_room(3)
         self.assertEqual(pair_ids(r), (1, 2))
         self.assertEqual(r.state_for(a.id, 1)["round_name"], "Semi-final")
         r.vote(a.id, 1, 1); r.vote(b.id, 1, 1)
@@ -316,7 +315,7 @@ class Tournament(unittest.TestCase):
         self.assertEqual(e.exception.status, 403)
 
     def test_tie_goes_to_higher_rating(self):
-        r, (a, b) = tournament_room(2)       # M1 7.1 vs M2 7.2
+        r, (a, b) = tournament_room(2)
         r.vote(a.id, 1, 1); r.vote(b.id, 2, 1)
         self.assertEqual(r.winner.id, 2)
 

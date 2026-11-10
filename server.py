@@ -1,7 +1,3 @@
-"""Moviepicker HTTP server: JSON API + static page. Python stdlib only.
-
-Env: TMDB_TOKEN (required), PORT (default 8000).
-"""
 import ipaddress
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -19,13 +15,13 @@ from pathlib import Path
 from game import MAX_ROOMS, GameError, Room
 from tmdb import MAX_PAGE, Tmdb, build_batch
 
-clock = time.time  # tests patch this
+clock = time.time
 STATIC = Path(__file__).resolve().parent / "static"
 CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
 BODY_MAX = 2048
-CREATE_LIMIT, CREATE_WINDOW = 5, 600   # new rooms per client per 10 min
-OPEN_PER_CLIENT = 2                     # rooms one client may have open at once
-MISS_LIMIT, MISS_WINDOW = 20, 600       # wrong room codes per client per 10 min (stops code guessing)
+CREATE_LIMIT, CREATE_WINDOW = 5, 600
+OPEN_PER_CLIENT = 2
+MISS_LIMIT, MISS_WINDOW = 20, 600
 REFILL_NOTICE = "Couldn't load more movies, retrying…"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
@@ -37,12 +33,11 @@ class App:
     def __init__(self, tmdb: Tmdb):
         self.tmdb = tmdb
         self.rooms: dict[str, Room] = {}
-        self.meta: dict[str, dict] = {}       # code -> {"seed", "page", "refilling"}
-        self.created: dict[str, list[float]] = {}   # client -> room creation times
-        self.misses: dict[str, list[float]] = {}    # client -> wrong-code times
+        self.meta: dict[str, dict] = {}
+        self.created: dict[str, list[float]] = {}
+        self.misses: dict[str, list[float]] = {}
         self.lock = threading.Lock()
 
-    # --- rooms ---------------------------------------------------------------
     def janitor(self, now: float) -> None:
         for code, room in list(self.rooms.items()):
             room.tick(now)
@@ -54,7 +49,6 @@ class App:
                 del log[k]
 
     def room(self, code: str, client: str, now: float, pid: str | None = None) -> Room:
-        """The room, if it exists and (when pid is given) pid is in it. Otherwise one 404 for both cases."""
         self.janitor(now)
         misses = [t for t in self.misses.get(client, []) if now - t < MISS_WINDOW]
         if len(misses) >= MISS_LIMIT:
@@ -107,7 +101,6 @@ class App:
         else:
             raise GameError("Unknown action", 400)
 
-    # --- deck refill (TMDB calls happen outside the lock) ----------------------
     def maybe_refill(self, room: Room, now: float) -> None:
         meta = self.meta.get(room.code)
         if meta and not meta["refilling"] and meta["page"] <= MAX_PAGE and room.needs_cards(now):
@@ -119,16 +112,16 @@ class App:
     def _refill(self, room: Room, meta: dict, weights: dict, exclude: set) -> None:
         try:
             batch = build_batch(self.tmdb, weights, exclude, meta["seed"], meta["page"])
-            if not batch:  # this genre mix ran out: widen to every genre
+            if not batch:
                 batch = build_batch(self.tmdb, {}, exclude, meta["seed"], meta["page"])
-            with ThreadPoolExecutor(8) as pool:  # runtime + RO provider per movie, in parallel
+            with ThreadPoolExecutor(8) as pool:
                 batch = list(pool.map(self.tmdb.details, batch))
             with self.lock:
                 room.add_cards(batch)
                 meta["page"] += 1
                 if room.notice == REFILL_NOTICE:
                     room.notice = None
-        except Exception as e:  # TMDB down/slow/rate-limited: keep the room alive, retry on next poll
+        except Exception as e:
             sys.stderr.write("refill %s: %r\n" % (room.code, e))
             with self.lock:
                 if room.notice is None:
@@ -146,8 +139,8 @@ def _int(v) -> int:
 class Handler(BaseHTTPRequestHandler):
     server_version = "moviepicker"
     sys_version = ""
-    timeout = 15  # seconds; a stalled client can't hold a thread forever
-    app: App  # set by make_server
+    timeout = 15
+    app: App
 
     def log_message(self, *a):
         pass
@@ -169,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict:
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
-            raise GameError("Send JSON", 415)  # also forces a CORS preflight for cross-site posts
+            raise GameError("Send JSON", 415)
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -187,7 +180,6 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def _client(self) -> str:
-        """Who is asking, for rate limits: the visitor IP from Cloudflare; IPv6 grouped per /64."""
         raw = self.headers.get("CF-Connecting-IP") or self.client_address[0]
         try:
             ip = ipaddress.ip_address(raw.strip())
@@ -204,7 +196,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, app.tmdb.genres())
             body = self._body() if method == "POST" else {}
             client = self._client()
-            # genre list comes from TMDB (cached); fetched before taking the lock
             genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
             with app.lock:
                 if method == "POST" and path == "/api/rooms":
@@ -231,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
         except GameError as e:
             self._json(e.status, {"error": str(e)})
         except Exception as e:
-            sys.stderr.write("error %s %r: %r\n" % (method, path, e))  # %r: no forged log lines via %0a
+            sys.stderr.write("error %s %r: %r\n" % (method, path, e))
             self._json(500, {"error": "Something went wrong"})
 
     def _static(self) -> None:
@@ -243,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
             if STATIC not in f.parents or not f.is_file():
                 f = None
         elif path in ("/favicon.ico", "/apple-touch-icon.png"):
-            f = STATIC / "apple-touch-icon.png"  # a PNG works as favicon.ico in every current browser
+            f = STATIC / "apple-touch-icon.png"
         else:
             f = None
         if f is None or not f.is_file():
