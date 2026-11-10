@@ -200,9 +200,18 @@ async function homeScreen() {
   fadeIn();
   try {
     const stats = await api("GET", "/api/stats");
-    if ($app.querySelector(".hero") && stats.top.length) draw(stats);
+    if ($app.querySelector(".hero") && stats.top.length) { draw(stats); fitRanks(); }
   } catch {}
 }
+
+function fitRanks() {
+  const rows = [...$app.querySelectorAll(".rank-row")];
+  if (!rows.length) return;
+  rows.forEach((r) => r.classList.remove("hidden"));
+  const box = getComputedStyle($app).overflowY === "auto" ? $app : document.scrollingElement;
+  for (let i = rows.length - 1; i > 0 && box.scrollHeight > box.clientHeight + 1; i--) rows[i].classList.add("hidden");
+}
+addEventListener("resize", fitRanks);
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && e.target.matches("main input")) $app.querySelector(".bottom button")?.click();

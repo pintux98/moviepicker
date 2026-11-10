@@ -1,3 +1,4 @@
+import hashlib
 import ipaddress
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -271,10 +272,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": "Something went wrong"})
 
     def _static(self) -> None:
-        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        parts = urllib.parse.urlsplit(self.path)
+        path = urllib.parse.unquote(parts.path)
         if path == "/" or re.fullmatch(r"/r/[A-Za-z2-9]{6}", path):
-            f = STATIC / "index.html"
-        elif path.startswith("/static/"):
+            return self._send(200, index_page(), TYPES[".html"], {"Cache-Control": "no-store"})
+        if path.startswith("/static/"):
             f = (STATIC / path[len("/static/"):]).resolve()
             if STATIC not in f.parents or not f.is_file():
                 f = None
@@ -284,8 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             f = None
         if f is None or not f.is_file():
             return self._send(404, b"Not found", "text/plain; charset=utf-8")
+        versioned = "v=" in parts.query
         self._send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"),
-                   {"Cache-Control": "no-cache"})
+                   {"Cache-Control": "public, max-age=31536000, immutable" if versioned else "no-cache"})
 
     def do_GET(self):
         if self.path.startswith("/api/"):
@@ -298,6 +301,14 @@ class Handler(BaseHTTPRequestHandler):
             self._api("POST")
         else:
             self._send(404, b"Not found", "text/plain; charset=utf-8")
+
+
+def index_page() -> bytes:
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "style.css", "qrcode.js", "favicon.svg"):
+        digest = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:10]
+        html = html.replace('"/static/%s"' % name, '"/static/%s?v=%s"' % (name, digest))
+    return html.encode()
 
 
 def open_stats(path: str) -> Stats:

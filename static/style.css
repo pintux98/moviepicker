@@ -33,7 +33,6 @@ input.code { font-size: 28px; letter-spacing: .2em; text-align: center; text-tra
 
 .brand { display: block; margin: 0 auto; border-radius: 22%; }
 .hero-logo { width: 64px; height: 64px; }
-.hero.compact .hero-logo { width: 48px; height: 48px; }
 .wait-logo { margin-top: 10vh; }
 .wait-logo .brand { width: 72px; height: 72px; }
 .wait-logo .loading { animation: fade-pulse 1.4s ease-in-out 4; }
@@ -121,13 +120,19 @@ main:has(> .card) { gap: 10px; }
 .chip .crown { display: inline-flex; font-size: 14px; }
 
 .hero { display: flex; flex-direction: column; gap: 4px; margin-top: 2vh; }
+.hero.compact { flex-direction: row; align-items: center; justify-content: center; gap: 10px; margin-top: 0; }
+.hero.compact .hero-logo { width: 40px; height: 40px; margin: 0; }
+.hero.compact h1 { font-size: 24px; }
+.hero.compact .muted { display: none; }
 .hero h1 { font-size: 28px; }
 .small-logo { font-size: 40px; margin-top: 0; }
 .home-actions { position: sticky; bottom: 0; z-index: 2; padding: 16px 0 max(12px, env(safe-area-inset-bottom));
   background: linear-gradient(to bottom, transparent, var(--bg) 30%); }
 .attrib { padding-top: 14px; }
 .stats-home { display: flex; flex-direction: column; gap: 8px; }
-.stats-home h3 { margin: 10px 0 0; font-size: 15px; color: var(--text); font-weight: 700; }
+.stats-home h3 { margin: 6px 0 0; font-size: 15px; color: var(--text); font-weight: 700; }
+.rank-row.hidden { display: none; }
+@media (max-height: 600px) { .strip { grid-template-columns: repeat(5, minmax(0, 52px)); } }
 .rank-list { display: flex; flex-direction: column; gap: 6px; }
 .rank-row { display: grid; grid-template-columns: 22px 34px 1fr; gap: 10px; align-items: center; text-align: left; min-height: 0;
   padding: 5px 10px 5px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; color: var(--text); font-weight: 500; }
@@ -136,8 +141,8 @@ main:has(> .card) { gap: 10px; }
 .stack.tight { gap: 2px; min-width: 0; }
 .stack.tight strong { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .muted.left { text-align: left; font-size: 13px; }
-.strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-.strip-item { padding: 0; min-height: 0; background: none; border-radius: 10px; flex: 1 1 0; min-width: 52px; max-width: 96px; }
+.strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.strip-item { padding: 0; min-height: 0; background: none; border-radius: 10px; min-width: 0; }
 .strip-poster { width: 100%; aspect-ratio: 2 / 3; border-radius: 10px; object-fit: cover; display: block; background: #2a2a33; }
 
 .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / .55); z-index: 20; display: flex; align-items: flex-end; justify-content: center;

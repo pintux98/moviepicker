@@ -1,4 +1,5 @@
 import http.client
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -254,6 +255,21 @@ class Api(ApiBase):
         for code in codes:
             self.assertRegex(code, r"^[A-Z2-9]{6}$")
         self.assertTrue(any(c.isdigit() for c in "".join(codes)))
+
+    def test_assets_are_versioned_and_page_never_cached(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/")
+        r = c.getresponse()
+        body = r.read().decode()
+        self.assertEqual(r.getheader("Cache-Control"), "no-store")
+        m = re.search(r'/static/app\.js\?v=([0-9a-f]{10})"', body)
+        self.assertIsNotNone(m, body)
+        self.assertRegex(body, r'/static/style\.css\?v=[0-9a-f]{10}"')
+        c.request("GET", "/static/app.js?v=" + m.group(1))
+        r = c.getresponse()
+        r.read()
+        self.assertIn("immutable", r.getheader("Cache-Control"))
+        c.close()
 
     def test_icons(self):
         for path in ("/favicon.ico", "/apple-touch-icon.png", "/static/favicon.svg"):
