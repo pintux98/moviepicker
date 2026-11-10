@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from game import MAX_ROOMS, GameError, Room
+from stats import Stats
 from tmdb import MAX_PAGE, Tmdb, build_batch
 
 clock = time.time
@@ -31,17 +32,27 @@ CSP = ("default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-s
 
 
 class App:
-    def __init__(self, tmdb: Tmdb):
+    def __init__(self, tmdb: Tmdb, stats: Stats):
         self.tmdb = tmdb
+        self.stats = stats
         self.rooms: dict[str, Room] = {}
         self.meta: dict[str, dict] = {}
         self.created: dict[str, list[float]] = {}
         self.misses: dict[str, list[float]] = {}
+        self.pending: list[tuple] = []
         self.lock = threading.Lock()
+
+    def record(self, events: list[tuple], now: float) -> None:
+        for kind, movie, yes in events:
+            if kind == "vote":
+                self.stats.record_vote(movie, yes)
+            else:
+                self.stats.record_pick(movie, now)
 
     def janitor(self, now: float) -> None:
         for code, room in list(self.rooms.items()):
             room.tick(now)
+            self.pending += room.drain_events()
             if room.phase == "closed":
                 del self.rooms[code]
                 self.meta.pop(code, None)
@@ -205,6 +216,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if method == "GET" and path == "/api/genres":
                 return self._json(200, app.tmdb.genres())
+            if method == "GET" and path == "/api/stats":
+                return self._json(200, {"top": app.stats.top(), "recent": app.stats.recent()})
             body = self._body() if method == "POST" else {}
             client = self._client()
             genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
@@ -231,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise GameError("Not found", 404)
                 app.maybe_refill(room, now)
+                events, app.pending = app.pending + room.drain_events(), []
+            app.record(events, now)
             self._json(200, out)
         except GameError as e:
             self._json(e.status, {"error": str(e)})
@@ -268,8 +283,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"Not found", "text/plain; charset=utf-8")
 
 
-def make_server(host: str, port: int, tmdb) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (Handler,), {"app": App(tmdb)})
+def make_server(host: str, port: int, tmdb, stats: Stats) -> ThreadingHTTPServer:
+    handler = type("BoundHandler", (Handler,), {"app": App(tmdb, stats)})
     srv = ThreadingHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv
@@ -280,8 +295,10 @@ def main() -> None:
     if not token:
         sys.exit("TMDB_TOKEN is not set")
     port = int(os.environ.get("PORT", "8000"))
+    data = Path(os.environ.get("DATA_DIR", "data"))
+    data.mkdir(parents=True, exist_ok=True)
     print("moviepicker on :%d" % port, flush=True)
-    make_server("0.0.0.0", port, Tmdb(token)).serve_forever()
+    make_server("0.0.0.0", port, Tmdb(token), Stats(str(data / "stats.db"))).serve_forever()
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 FROM python:3.13-alpine@sha256:1e1f6334529d1fb26a2ef619d7cffb30a7c7d7cc1cc7338ebee283a58d1aeaca
 WORKDIR /app
-COPY game.py tmdb.py server.py ./
+COPY game.py tmdb.py stats.py server.py ./
 COPY static ./static
-ENV PYTHONUNBUFFERED=1 PORT=8000
+RUN mkdir /data && chown nobody:nobody /data
+ENV PYTHONUNBUFFERED=1 PORT=8000 DATA_DIR=/data
+VOLUME /data
 USER nobody
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:8000/ >/dev/null || exit 1

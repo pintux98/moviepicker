@@ -5,6 +5,7 @@ import time
 import unittest
 
 import server
+from stats import Stats
 from game import Movie
 
 
@@ -33,7 +34,7 @@ class ApiBase(unittest.TestCase):
 
     def setUp(self):
         server.clock = time.time
-        self.srv = server.make_server("127.0.0.1", 0, self.tmdb)
+        self.srv = server.make_server("127.0.0.1", 0, self.tmdb, Stats(":memory:"))
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.port = self.srv.server_address[1]
 
@@ -79,6 +80,9 @@ class ApiBase(unittest.TestCase):
 
 
 class Api(ApiBase):
+    def test_stats_empty(self):
+        self.assertEqual(self.call("GET", "/api/stats"), (200, {"top": [], "recent": []}))
+
     def test_genres(self):
         s, d = self.call("GET", "/api/genres")
         self.assertEqual((s, d[0]["name"]), (200, "Animation"))
@@ -106,6 +110,10 @@ class Api(ApiBase):
         self.assertEqual(d["phase"], "winner")
         self.assertIsNotNone(d["winner"]["title"])
         self.assertEqual(self.act(code, b, type="close")[0], 403)
+        s, st = self.call("GET", "/api/stats")
+        self.assertEqual([m["title"] for m in st["recent"]], [d["winner"]["title"]])
+        self.assertEqual(st["top"][0]["picked"], 1)
+        self.assertEqual(st["top"][0]["likes"], 2)
         self.assertEqual(self.act(code, a, type="close")[0], 200)
         s, d = self.state(code, a)
         self.assertEqual((s, d["error"]), (404, "This room is closed"))

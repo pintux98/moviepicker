@@ -82,6 +82,7 @@ class Room:
         self.bye: Movie | None = None
         self.pair_votes: dict[str, int] = {}
         self.winner: Movie | None = None
+        self.events: list[tuple] = []
 
     def _player(self, pid: str) -> Player:
         if pid not in self.players:
@@ -223,6 +224,7 @@ class Room:
         if index != c or c >= len(self.deck) or c >= self.resolved + MAX_LEAD:
             return
         self.votes.setdefault(c, {})[pid] = bool(yes)
+        self.events.append(("vote", self.deck[c], bool(yes)))
         p.cursor = c + 1
         self._resolve(now)
 
@@ -318,6 +320,11 @@ class Room:
     def _finish(self, movie: Movie) -> None:
         self.winner = movie
         self.phase = "winner"
+        self.events.append(("pick", movie, None))
+
+    def drain_events(self) -> list[tuple]:
+        events, self.events = self.events, []
+        return events
 
     def genre_weights(self, now: float) -> dict[int, int]:
         w: dict[int, int] = {}

@@ -222,6 +222,14 @@ class Swiping(unittest.TestCase):
         self.assertEqual(r.shortlist, [])
         self.assertEqual(r.phase, "swiping")
 
+    def test_swipes_emit_one_vote_event_each(self):
+        r, (a, b) = swiping_room(2)
+        r.swipe(a.id, 0, True, 1)
+        r.swipe(a.id, 0, True, 1)
+        r.swipe(b.id, 0, False, 1)
+        self.assertEqual([(k, m.id, yes) for k, m, yes in r.drain_events()], [("vote", 1, True), ("vote", 1, False)])
+        self.assertEqual(r.drain_events(), [])
+
     def test_swipe_is_idempotent(self):
         r, (a, b) = swiping_room(2)
         r.swipe(a.id, 0, True, 1)
@@ -334,6 +342,11 @@ class Tournament(unittest.TestCase):
         r, (a, b) = tournament_room(2)
         self.assertEqual(pair_ids(r), (1, 2))
         self.assertEqual(r.state_for(a.id, 1)["round_name"], "Final")
+
+    def test_winner_emits_pick_event(self):
+        r, (a, b) = tournament_room(1)
+        picks = [(k, m.id) for k, m, _ in r.drain_events() if k == "pick"]
+        self.assertEqual(picks, [("pick", 1)])
 
     def test_one_match_wins_directly(self):
         r, (a, b) = tournament_room(1)
