@@ -2,6 +2,8 @@
 
 Pick a movie together. Everyone joins a room from their phone, picks genres and swipes yes or no on movies. Matches go into a quick head-to-head tournament, and the winner is tonight's movie.
 
+**Try it: [moviepicker.pintux.org](https://moviepicker.pintux.org)**
+
 - 2 to 10 players, no accounts: a 6-character room code (or QR code) and a nickname
 - English-language feature films from [TMDB](https://www.themoviedb.org/), with a "where to stream" hint for Romania
 - Python standard library only, no database, about 20 MB of RAM
