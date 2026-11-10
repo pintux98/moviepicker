@@ -374,8 +374,9 @@ class Room:
 
     def _swipe_view(self, me: Player) -> dict:
         if self.phase != "swiping":
-            return {"cards": [], "ahead": False}
+            return {"cards": [], "ahead": False, "loading": False}
         c = self._cursor(me)
-        ahead = c >= self.resolved + MAX_LEAD or c >= len(self.deck)
-        cards = [] if ahead else [dict(m.public(), index=i) for i, m in enumerate(self.deck[c:c + 5], start=c)]
-        return {"cards": cards, "ahead": ahead}
+        ahead = c >= self.resolved + MAX_LEAD
+        loading = not ahead and c >= len(self.deck)
+        cards = [] if ahead or loading else [dict(m.public(), index=i) for i, m in enumerate(self.deck[c:c + 5], start=c)]
+        return {"cards": cards, "ahead": ahead, "loading": loading}

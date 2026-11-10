@@ -5,7 +5,7 @@ const $toast = document.getElementById("toast");
 const POLL_MS = 1000;
 let session = load("mp");
 let state = null, lastKey = "", timer = null, seenMatch = null, genreList = null;
-let picked = null, lateGenresSent = false, busy = false, dragging = false;
+let picked = null, lateGenresSent = false, busy = false, dragging = false, lastScreen = "";
 
 function load(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
 function store(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} }
@@ -77,10 +77,13 @@ function onState() {
   const key = JSON.stringify(s) + "|" + lateGenresSent;
   if (key === lastKey || dragging) return;
   lastKey = key;
+  const screen = s.phase + "|" + (s.match ?? "");
+  if (screen !== lastScreen) { lastScreen = screen; fadeIn(); }
   ({ lobby: lobbyScreen, genres: genresScreen, swiping: swipeScreen, tournament: tournamentScreen, winner: winnerScreen })[s.phase]?.(s);
 }
 
-const runtime = (m) => (m ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : null);
+const runtime = (m) => (m ? h("span", {}, `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`) : null);
+const stars = (m) => h("span", {}, `⭐ ${Number(m.rating).toFixed(1)}`);
 const titleYear = (m) => (m.year ? `${m.title} (${m.year})` : m.title);
 const poster = (m, cls) => (m.poster ? h("img", { src: m.poster, alt: "", class: cls, loading: "eager" }) : h("div", { class: cls }));
 const provider = (m) => (m.provider ? h("span", { class: "badge" }, "on " + m.provider) : null);
@@ -111,17 +114,69 @@ async function enter(promise) {
   busy = false;
 }
 
-function homeScreen() {
+function fadeIn() {
+  $app.classList.remove("fade");
+  void $app.offsetWidth;
+  $app.classList.add("fade");
+}
+
+function openSheet(m) {
+  const close = () => { back.classList.add("closing"); setTimeout(() => back.remove(), 200); document.removeEventListener("keydown", esc); };
+  const esc = (e) => { if (e.key === "Escape") close(); };
+  const sheet = h("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": titleYear(m) },
+    h("div", { class: "grab", "aria-hidden": "true" }),
+    m.poster ? h("img", { class: "sheet-poster", src: m.poster, alt: "" }) : null,
+    h("h2", {}, titleYear(m)),
+    h("div", { class: "meta center" }, stars(m), runtime(m.runtime), provider(m)),
+    h("p", { class: "overview full" }, m.overview),
+    h("div", { class: "stats" },
+      h("div", { class: "stat" }, h("b", {}, m.picked), "picked"),
+      h("div", { class: "stat" }, h("b", {}, m.likes), "👍"),
+      h("div", { class: "stat" }, h("b", {}, m.dislikes), "👎")),
+    h("button", { class: "alt", onclick: () => close() }, "Close"));
+  const back = h("div", { class: "backdrop", onclick: (e) => { if (e.target === back) close(); } }, sheet);
+  let y0 = null;
+  sheet.addEventListener("pointerdown", (e) => { y0 = e.clientY; });
+  sheet.addEventListener("pointerup", (e) => { if (y0 !== null && e.clientY - y0 > 80) close(); y0 = null; });
+  document.addEventListener("keydown", esc);
+  document.body.append(back);
+  sheet.querySelector("button").focus();
+}
+
+function statsSection(stats) {
+  if (!stats || !stats.top.length) return null;
+  const row = (m, i) => h("button", { class: "rank-row", onclick: () => openSheet(m) },
+    h("span", { class: "rank" }, i + 1),
+    poster(m, "mini-poster"),
+    h("span", { class: "stack tight" }, h("strong", {}, titleYear(m)),
+      h("span", { class: "muted left" }, `picked ${m.picked}×` + (m.dislikes ? ` · skipped ${m.dislikes}×` : ""))));
+  const tile = (m) => h("button", { class: "strip-item", onclick: () => openSheet(m), "aria-label": titleYear(m) }, poster(m, "strip-poster"));
+  return h("section", { class: "stats-home" },
+    h("h3", {}, "🏆 Most picked"),
+    h("div", { class: "rank-list" }, stats.top.map(row)),
+    h("h3", {}, "🕒 Picked lately"),
+    h("div", { class: "strip" }, stats.recent.map(tile)));
+}
+
+async function homeScreen() {
   history.replaceState(null, "", "/");
-  show(
-    h("div", { class: "logo", "aria-hidden": "true" }, "🍿"),
-    h("h1", {}, "Moviepicker"),
-    h("p", { class: "muted" }, "Find a movie everyone wants to watch."),
-    h("div", { class: "bottom" },
+  const draw = (stats) => show(
+    h("div", { class: "hero" },
+      h("div", { class: "logo small-logo", "aria-hidden": "true" }, "🍿"),
+      h("h1", {}, "Moviepicker"),
+      h("p", { class: "muted" }, "Find a movie everyone wants to watch.")),
+    statsSection(stats),
+    h("div", { class: "bottom home-actions" },
       h("button", { onclick: createScreen }, "New room"),
       h("button", { class: "alt", onclick: () => joinScreen("") }, "Join a room"),
       h("p", { class: "attrib" }, "This product uses the TMDB API but is not endorsed or certified by TMDB. Movie data from ",
         h("a", { href: "https://www.themoviedb.org/", target: "_blank", rel: "noopener noreferrer" }, "themoviedb.org"), ".")));
+  draw(null);
+  fadeIn();
+  try {
+    const stats = await api("GET", "/api/stats");
+    if ($app.querySelector(".hero") && stats.top.length) draw(stats);
+  } catch {}
 }
 
 function createScreen() {
@@ -224,63 +279,83 @@ function lateGenresScreen() {
       h("button", { onclick: async () => { lateGenresSent = true; await act("genres", { ids: [...picked] }); } }, "Start swiping")));
 }
 
-function shortlistBar(s) {
+function matchesBar(s) {
   const slots = [];
   for (let i = 0; i < 4; i++) {
     const m = s.shortlist[i];
-    slots.push(m && m.poster ? h("img", { src: m.poster, alt: m.title, title: m.title }) : h("span", { class: "slot", "aria-hidden": "true" }));
+    slots.push(m && m.poster ? h("img", { class: "slot-in", src: m.poster, alt: m.title, title: m.title }) : h("span", { class: "slot", "aria-hidden": "true" }));
   }
-  return h("div", { class: "shortlist" }, `Shortlist ${s.shortlist.length}`, slots);
+  return h("div", { class: "matches" },
+    h("div", { class: "shortlist" }, `Matches ${Math.min(s.shortlist.length, 4)}/4`, slots),
+    h("p", { class: "muted small" }, "At 4 matches you vote head-to-head."));
 }
 
+let lastCard = null;
 function swipeScreen(s) {
   if (!s.me.ready && !lateGenresSent && !s.me.genres.length) return lateGenresScreen();
   const notice = s.notice ? h("p", { class: "notice" }, s.notice) : null;
   const hostVote = s.host && s.shortlist.length
-    ? h("button", { class: "alt", onclick: () => act("start_tournament") }, `Vote now with ${s.shortlist.length}`) : null;
+    ? h("button", { class: "ghost vote-now", onclick: () => {
+        const n = s.shortlist.length;
+        if (confirm(`Start the vote with ${n} match${n > 1 ? "es" : ""}?`)) act("start_tournament");
+      } }, `Vote now with ${s.shortlist.length} →`) : null;
   if (!s.cards.length) {
-    return show(notice,
-      h("div", { class: "logo", "aria-hidden": "true" }, "⏳"),
-      h("h2", {}, "You're ahead!"),
-      h("p", { class: "muted" }, "Waiting for the others to catch up. New cards show up in a second."),
-      shortlistBar(s),
-      h("div", { class: "bottom" }, hostVote, leave()));
+    return show(notice, hostVote,
+      h("div", { class: "logo spin", "aria-hidden": "true" }, s.loading ? "🍿" : "⏳"),
+      h("h2", {}, s.loading ? "Loading movies…" : "You're ahead!"),
+      h("p", { class: "muted" }, s.loading ? "Picking movies for your genres." : "Waiting for the others to catch up."),
+      matchesBar(s),
+      h("div", { class: "bottom" }, leave()));
   }
   const m = s.cards[0];
   for (const next of s.cards.slice(1)) if (next.poster) new Image().src = next.poster;
-  const card = h("article", { class: "card", "aria-label": titleYear(m) },
+  const fresh = lastCard !== m.index;
+  lastCard = m.index;
+  const card = h("article", { class: "card" + (fresh ? " in" : ""), "aria-label": titleYear(m) },
     poster(m, "poster"),
     h("div", { class: "body" },
       h("div", { class: "title" }, titleYear(m)),
-      h("div", { class: "meta" }, `⭐ ${m.rating.toFixed(1)}`, runtime(m.runtime), provider(m)),
+      h("div", { class: "meta" }, stars(m), runtime(m.runtime), provider(m)),
       h("p", { class: "overview" }, m.overview)));
   const vote = (yes) => {
     if (busy) return;
     busy = true;
-    card.classList.add(yes ? "yes" : "no");
-    setTimeout(async () => { busy = false; await act("swipe", { index: m.index, yes }); }, 180);
+    const dir = yes ? 1 : -1;
+    card.classList.remove("in");
+    card.style.transition = "transform .28s ease-in, opacity .28s ease-in";
+    card.style.transform = `translateX(${dir * 130}%) rotate(${dir * 16}deg)`;
+    card.style.opacity = "0";
+    setTimeout(async () => { busy = false; await act("swipe", { index: m.index, yes }); }, 200);
   };
   dragGesture(card, vote);
-  show(notice, card,
+  show(notice, hostVote, card,
     h("div", { class: "votes" },
       h("button", { class: "no", "aria-label": "No", onclick: () => vote(false) }, "👎"),
       h("button", { class: "yes", "aria-label": "Yes", onclick: () => vote(true) }, "👍")),
-    shortlistBar(s), hostVote);
+    matchesBar(s));
 }
 
 function dragGesture(card, vote) {
   let x0 = null, dx = 0;
-  card.addEventListener("pointerdown", (e) => { x0 = e.clientX; dx = 0; dragging = true; card.setPointerCapture(e.pointerId); });
+  card.addEventListener("pointerdown", (e) => {
+    x0 = e.clientX; dx = 0; dragging = true;
+    card.classList.remove("in");
+    card.style.transition = "none";
+    card.setPointerCapture(e.pointerId);
+  });
   card.addEventListener("pointermove", (e) => {
     if (x0 === null) return;
     dx = e.clientX - x0;
-    card.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
+    card.style.transform = `translateX(${dx}px) rotate(${dx / 18}deg)`;
+    card.dataset.lean = dx > 40 ? "yes" : dx < -40 ? "no" : "";
   });
   const end = () => {
     if (x0 === null) return;
     x0 = null; dragging = false;
-    if (Math.abs(dx) > 90) vote(dx > 0);
-    else card.style.transform = "";
+    card.dataset.lean = "";
+    if (Math.abs(dx) > 90) return vote(dx > 0);
+    card.style.transition = "transform .2s ease-out";
+    card.style.transform = "";
   };
   card.addEventListener("pointerup", end);
   card.addEventListener("pointercancel", end);
@@ -297,7 +372,7 @@ function tournamentScreen(s) {
       } },
     poster(m, "ph"),
     h("span", { class: "stack" }, h("strong", {}, titleYear(m)),
-      h("span", { class: "meta" }, `⭐ ${m.rating.toFixed(1)}`, provider(m))));
+      h("span", { class: "meta" }, stars(m), provider(m))));
   show(
     h("h2", {}, s.round_name),
     h("p", { class: "muted" }, "Tap the one you'd rather watch."),
@@ -307,9 +382,28 @@ function tournamentScreen(s) {
       h("div", { class: "row" }, b.round + ": ", h("span", { class: "w" }, b.winner), ` beat ${b.winner === b.a ? b.b : b.a}`))));
 }
 
+function confetti() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const colors = ["#e5484d", "#ffd166", "#2fbf71", "#4cc9f0", "#b388ff"];
+  const box = h("div", { class: "confetti", "aria-hidden": "true" });
+  for (let i = 0; i < 60; i++) {
+    const p = h("i");
+    p.style.left = Math.random() * 100 + "%";
+    p.style.background = colors[i % colors.length];
+    p.style.animationDelay = Math.random() * 0.6 + "s";
+    p.style.animationDuration = 1.8 + Math.random() * 1.4 + "s";
+    p.style.setProperty("--drift", (Math.random() * 160 - 80) + "px");
+    box.append(p);
+  }
+  document.body.append(box);
+  setTimeout(() => box.remove(), 4000);
+}
+
+let celebrated = null;
 function winnerScreen(s) {
   const m = s.winner;
-  show(h("div", { class: "stack winner" },
+  if (celebrated !== s.code) { celebrated = s.code; confetti(); }
+  show(h("div", { class: "stack winner pop" },
       h("div", { class: "trophy", "aria-hidden": "true" }, "🏆"),
       h("p", { class: "muted" }, "Tonight:"),
       h("h1", {}, titleYear(m)),

@@ -230,6 +230,13 @@ class Swiping(unittest.TestCase):
         self.assertEqual([(k, m.id, yes) for k, m, yes in r.drain_events()], [("vote", 1, True), ("vote", 1, False)])
         self.assertEqual(r.drain_events(), [])
 
+    def test_state_says_loading_not_ahead_while_deck_is_empty(self):
+        r, (a, b) = swiping_room(2, cards=0)
+        s = r.state_for(a.id, 1)
+        self.assertEqual((s["loading"], s["ahead"], s["cards"]), (True, False, []))
+        r.add_cards(movies(3))
+        self.assertFalse(r.state_for(a.id, 1)["loading"])
+
     def test_swipe_is_idempotent(self):
         r, (a, b) = swiping_room(2)
         r.swipe(a.id, 0, True, 1)
