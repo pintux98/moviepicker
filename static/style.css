@@ -47,7 +47,10 @@ button.chip { min-height: 44px; padding: 0 14px; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
   display: flex; flex-direction: column; touch-action: pan-y; user-select: none; will-change: transform; }
-.card .poster { width: 100%; aspect-ratio: 2 / 3; max-height: 46dvh; object-fit: cover; background: linear-gradient(160deg, #2a2a33, #15151b); display: block; }
+.frame { position: relative; overflow: hidden; background: linear-gradient(160deg, #2a2a33, #15151b); }
+.frame-bg { position: absolute; inset: -10%; width: 120%; height: 120%; object-fit: cover; filter: blur(22px) brightness(.55); }
+.frame-img { position: relative; display: block; width: 100%; height: 100%; object-fit: contain; }
+.card .poster { width: 100%; aspect-ratio: 2 / 3; max-height: 46dvh; }
 .card .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
 .card .title { font-size: 19px; font-weight: 750; }
 .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 14px; }
@@ -73,7 +76,7 @@ button.chip { min-height: 44px; padding: 0 14px; }
 .pair { display: flex; flex-direction: column; gap: 10px; flex: 1; }
 .pick { flex: 1 1 0; display: grid; grid-template-columns: 44% 1fr; gap: 14px; align-items: stretch; text-align: left;
   background: var(--panel); border: 2px solid var(--line); border-radius: var(--radius); padding: 10px; min-height: 0; color: var(--text); font-weight: 500; }
-.pick img, .pick .ph { width: 100%; height: 100%; min-height: 0; border-radius: 10px; object-fit: cover; background: #2a2a33; }
+.pick .ph { width: 100%; height: 100%; min-height: 0; border-radius: 10px; }
 .pick > .stack { align-self: center; }
 .pick strong { font-size: 18px; }
 .pick.mine { border-color: var(--gold); box-shadow: 0 0 0 3px rgb(255 209 102 / .25); }

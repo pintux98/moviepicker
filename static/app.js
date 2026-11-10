@@ -86,6 +86,9 @@ const runtime = (m) => (m ? h("span", {}, `${Math.floor(m / 60)}h ${String(m % 6
 const stars = (m) => h("span", {}, `⭐ ${Number(m.rating).toFixed(1)}`);
 const titleYear = (m) => (m.year ? `${m.title} (${m.year})` : m.title);
 const poster = (m, cls) => (m.poster ? h("img", { src: m.poster, alt: "", class: cls, loading: "eager" }) : h("div", { class: cls }));
+const framedPoster = (m, cls) => h("div", { class: "frame " + cls },
+  m.poster ? h("img", { class: "frame-bg", src: m.poster, alt: "", "aria-hidden": "true" }) : null,
+  m.poster ? h("img", { class: "frame-img", src: m.poster, alt: "" }) : null);
 const provider = (m) => (m.provider ? h("span", { class: "badge" }, "on " + m.provider) : null);
 const leave = () => h("button", { class: "ghost", onclick: async () => {
   try { await api("POST", `/api/rooms/${session.code}/action`, { type: "leave" }); } catch {}
@@ -312,7 +315,7 @@ function swipeScreen(s) {
   const fresh = lastCard !== m.index;
   lastCard = m.index;
   const card = h("article", { class: "card" + (fresh ? " in" : ""), "aria-label": titleYear(m) },
-    poster(m, "poster"),
+    framedPoster(m, "poster"),
     h("div", { class: "body" },
       h("div", { class: "title" }, titleYear(m)),
       h("div", { class: "meta" }, stars(m), runtime(m.runtime), provider(m)),
@@ -370,7 +373,7 @@ function tournamentScreen(s) {
         await act("vote", { movie_id: m.id, match: s.match });
         busy = false;
       } },
-    poster(m, "ph"),
+    framedPoster(m, "ph"),
     h("span", { class: "stack" }, h("strong", {}, titleYear(m)),
       h("span", { class: "meta" }, stars(m), provider(m))));
   show(
