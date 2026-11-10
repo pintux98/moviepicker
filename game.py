@@ -224,7 +224,6 @@ class Room:
         if index != c or c >= len(self.deck) or c >= self.resolved + MAX_LEAD:
             return
         self.votes.setdefault(c, {})[pid] = bool(yes)
-        self.events.append(("vote", self.deck[c], bool(yes)))
         p.cursor = c + 1
         self._resolve(now)
 
@@ -236,6 +235,7 @@ class Room:
                 return
             yes = sum(votes[p.id] for p in active)
             movie = self.deck[self.resolved]
+            self.events.append(("tally", movie, (yes, len(active) - yes)))
             self.resolved += 1
             if yes >= threshold(len(active), self.relaxed):
                 self.shortlist.append(movie)

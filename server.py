@@ -5,6 +5,7 @@ import os
 import random
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ BODY_MAX = 2048
 CREATE_LIMIT, CREATE_WINDOW = 5, 600
 OPEN_PER_CLIENT = 2
 MISS_LIMIT, MISS_WINDOW = 20, 600
+PICK_WINDOW = 86400
 REFILL_NOTICE = "Couldn't load more movies, retrying…"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
@@ -40,25 +42,36 @@ class App:
         self.created: dict[str, list[float]] = {}
         self.misses: dict[str, list[float]] = {}
         self.pending: list[tuple] = []
+        self.last_pick: dict[str, float] = {}
         self.lock = threading.Lock()
 
+    def drain(self, room: Room) -> list[tuple]:
+        owner = self.meta.get(room.code, {}).get("owner")
+        return [(kind, movie, data, owner) for kind, movie, data in room.drain_events()]
+
     def record(self, events: list[tuple], now: float) -> None:
-        for kind, movie, yes in events:
-            if kind == "vote":
-                self.stats.record_vote(movie, yes)
-            else:
-                self.stats.record_pick(movie, now)
+        for kind, movie, data, owner in events:
+            try:
+                if kind == "tally":
+                    self.stats.record_tally(movie, *data)
+                elif now - self.last_pick.get(owner, -PICK_WINDOW) >= PICK_WINDOW:
+                    self.last_pick[owner] = now
+                    self.stats.record_pick(movie, now)
+            except sqlite3.Error as e:
+                sys.stderr.write("stats: %r\n" % e)
 
     def janitor(self, now: float) -> None:
         for code, room in list(self.rooms.items()):
             room.tick(now)
-            self.pending += room.drain_events()
+            self.pending += self.drain(room)
             if room.phase == "closed":
                 del self.rooms[code]
                 self.meta.pop(code, None)
         for log, window in ((self.created, CREATE_WINDOW), (self.misses, MISS_WINDOW)):
             for k in [k for k, ts in log.items() if not ts or now - ts[-1] >= window]:
                 del log[k]
+        for k in [k for k, t in self.last_pick.items() if now - t >= PICK_WINDOW]:
+            del self.last_pick[k]
 
     def room(self, code: str, now: float, pid: str) -> Room:
         self.janitor(now)
@@ -217,7 +230,11 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/api/genres":
                 return self._json(200, app.tmdb.genres())
             if method == "GET" and path == "/api/stats":
-                return self._json(200, {"top": app.stats.top(), "recent": app.stats.recent()})
+                try:
+                    return self._json(200, {"top": app.stats.top(), "recent": app.stats.recent()})
+                except sqlite3.Error as e:
+                    sys.stderr.write("stats: %r\n" % e)
+                    return self._json(200, {"top": [], "recent": []})
             body = self._body() if method == "POST" else {}
             client = self._client()
             genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
@@ -244,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise GameError("Not found", 404)
                 app.maybe_refill(room, now)
-                events, app.pending = app.pending + room.drain_events(), []
+                events, app.pending = app.pending + app.drain(room), []
             app.record(events, now)
             self._json(200, out)
         except GameError as e:
@@ -283,6 +300,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"Not found", "text/plain; charset=utf-8")
 
 
+def open_stats(path: str) -> Stats:
+    try:
+        return Stats(path)
+    except sqlite3.Error as e:
+        sys.stderr.write("stats: can't open %s (%r), keeping stats in memory only\n" % (path, e))
+        return Stats(":memory:")
+
+
 def make_server(host: str, port: int, tmdb, stats: Stats) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"app": App(tmdb, stats)})
     srv = ThreadingHTTPServer((host, port), handler)
@@ -296,9 +321,12 @@ def main() -> None:
         sys.exit("TMDB_TOKEN is not set")
     port = int(os.environ.get("PORT", "8000"))
     data = Path(os.environ.get("DATA_DIR", "data"))
-    data.mkdir(parents=True, exist_ok=True)
+    try:
+        data.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     print("moviepicker on :%d" % port, flush=True)
-    make_server("0.0.0.0", port, Tmdb(token), Stats(str(data / "stats.db"))).serve_forever()
+    make_server("0.0.0.0", port, Tmdb(token), open_stats(str(data / "stats.db"))).serve_forever()
 
 
 if __name__ == "__main__":

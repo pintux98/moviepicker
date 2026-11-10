@@ -222,12 +222,21 @@ class Swiping(unittest.TestCase):
         self.assertEqual(r.shortlist, [])
         self.assertEqual(r.phase, "swiping")
 
-    def test_swipes_emit_one_vote_event_each(self):
+    def test_each_decided_card_emits_one_tally(self):
         r, (a, b) = swiping_room(2)
         r.swipe(a.id, 0, True, 1)
         r.swipe(a.id, 0, True, 1)
+        self.assertEqual(r.drain_events(), [])
         r.swipe(b.id, 0, False, 1)
-        self.assertEqual([(k, m.id, yes) for k, m, yes in r.drain_events()], [("vote", 1, True), ("vote", 1, False)])
+        self.assertEqual([(k, m.id, n) for k, m, n in r.drain_events()], [("tally", 1, (1, 1))])
+        self.assertEqual(r.drain_events(), [])
+
+    def test_rejoining_cannot_inflate_votes(self):
+        r, (a, b) = swiping_room(2)
+        for i in range(5):
+            p = r.add_player("again%d" % i, 1)
+            r.swipe(p.id, 0, True, 1)
+            r.leave(p.id, 1)
         self.assertEqual(r.drain_events(), [])
 
     def test_state_says_loading_not_ahead_while_deck_is_empty(self):

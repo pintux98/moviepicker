@@ -64,6 +64,16 @@ Rate limits (rooms per visitor, wrong room codes) are counted per visitor IP, re
 
 Rooms live in memory, so a restart closes any open rooms.
 
+## Stats
+
+The home page shows the most picked and the latest picked movies.
+
+- Each finished room adds one pick to its winner, at most once per visitor per 24 hours.
+- Each decided card adds its 👍 and 👎 votes.
+- Only movie data and counts are stored: no names, rooms or IP addresses.
+
+Stats live in SQLite at `$DATA_DIR/stats.db` (`/data` in the container). Mount a volume there to keep them across deploys (in Coolify: **Persistent Storage**, destination `/data`). If the folder isn't writable, the app keeps running and stats stay in memory.
+
 ## Tests
 
 ```sh

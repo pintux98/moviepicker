@@ -1,4 +1,7 @@
 import http.client
+import sqlite3
+import tempfile
+from pathlib import Path
 import json
 import threading
 import time
@@ -80,6 +83,23 @@ class ApiBase(unittest.TestCase):
 
 
 class Api(ApiBase):
+    def solo_game(self, ip):
+        code, a = self.create(ip=ip)
+        self.call("POST", "/api/rooms/%s/action" % code, {"type": "start"}, pid=a, ip=ip)
+        self.call("POST", "/api/rooms/%s/action" % code, {"type": "force_start"}, pid=a, ip=ip)
+        d = self.wait_state(code, a, lambda d: d["cards"])
+        self.call("POST", "/api/rooms/%s/action" % code, {"type": "swipe", "index": d["cards"][0]["index"], "yes": True}, pid=a, ip=ip)
+        self.call("POST", "/api/rooms/%s/action" % code, {"type": "start_tournament"}, pid=a, ip=ip)
+        self.call("POST", "/api/rooms/%s/action" % code, {"type": "close"}, pid=a, ip=ip)
+
+    def test_one_counted_pick_per_creator_per_day(self):
+        self.solo_game("3.3.3.3")
+        self.solo_game("3.3.3.3")
+        picks = lambda: sum(m["picked"] for m in self.call("GET", "/api/stats")[1]["top"])
+        self.assertEqual(picks(), 1)
+        self.solo_game("3.3.3.4")
+        self.assertEqual(picks(), 2)
+
     def test_stats_empty(self):
         self.assertEqual(self.call("GET", "/api/stats"), (200, {"top": [], "recent": []}))
 
@@ -242,6 +262,43 @@ class Api(ApiBase):
     def test_non_member_gets_404_like_unknown_room(self):
         code, a = self.create()
         self.assertEqual(self.state(code, "nobody")[0], 404)
+
+
+class BrokenStats(Stats):
+    def record_tally(self, *a):
+        raise sqlite3.OperationalError("database or disk is full")
+
+    record_pick = record_tally
+
+    def top(self, *a):
+        raise sqlite3.OperationalError("database is locked")
+
+
+class ApiStatsBroken(ApiBase):
+    def setUp(self):
+        server.clock = time.time
+        self.srv = server.make_server("127.0.0.1", 0, FakeTmdb(), BrokenStats(":memory:"))
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.port = self.srv.server_address[1]
+
+    def test_stats_failure_never_breaks_the_game(self):
+        code, a = self.create()
+        self.act(code, a, type="start")
+        self.act(code, a, type="force_start")
+        d = self.wait_state(code, a, lambda d: d["cards"])
+        self.assertEqual(self.act(code, a, type="swipe", index=d["cards"][0]["index"], yes=True)[0], 200)
+        self.assertEqual(self.act(code, a, type="start_tournament")[0], 200)
+        self.assertEqual(self.state(code, a)[1]["phase"], "winner")
+        self.assertEqual(self.call("GET", "/api/stats"), (200, {"top": [], "recent": []}))
+
+
+class OpenStats(unittest.TestCase):
+    def test_unwritable_path_falls_back_to_memory(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = server.open_stats(str(Path(d) / "no" / "such" / "stats.db"))
+            s.record_pick(Movie(1, "M", 2000, 7.0, "o", None, [16]), 1.0)
+            self.assertEqual(s.top()[0]["picked"], 1)
+            s.close()
 
 
 class ApiTmdbDown(ApiBase):

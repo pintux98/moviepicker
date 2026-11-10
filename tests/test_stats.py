@@ -19,16 +19,15 @@ class StatsStore(unittest.TestCase):
 
     def test_votes_and_picks_are_counted(self):
         m = movie(1)
-        self.s.record_vote(m, True)
-        self.s.record_vote(m, True)
-        self.s.record_vote(m, False)
+        self.s.record_tally(m, 2, 0)
+        self.s.record_tally(m, 0, 1)
         self.s.record_pick(m, 100.0)
         [row] = self.s.top()
         self.assertEqual((row["title"], row["picked"], row["likes"], row["dislikes"]), ("M1", 1, 2, 1))
         self.assertEqual((row["overview"], row["runtime"], row["provider"]), ("about M1", 90, "Netflix"))
 
     def test_movies_never_picked_are_not_listed(self):
-        self.s.record_vote(movie(1), True)
+        self.s.record_tally(movie(1), 1, 0)
         self.assertEqual((self.s.top(), self.s.recent()), ([], []))
 
     def test_top_orders_by_picks_then_most_recent(self):
@@ -53,8 +52,13 @@ class StatsStore(unittest.TestCase):
         self.s.record_pick(movie(1), 1.0)
         newer = movie(1)
         newer.provider = "Disney Plus"
-        self.s.record_vote(newer, True)
+        self.s.record_tally(newer, 1, 0)
         self.assertEqual(self.s.top()[0]["provider"], "Disney Plus")
+
+    def test_exact_pick_time_is_not_exposed(self):
+        self.s.record_pick(movie(1), 123.456)
+        self.assertNotIn("last_picked", self.s.top()[0])
+        self.assertNotIn("last_picked", self.s.recent()[0])
 
     def test_survives_reopen(self):
         with tempfile.TemporaryDirectory() as d:

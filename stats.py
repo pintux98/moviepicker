@@ -26,7 +26,7 @@ ON CONFLICT(id) DO UPDATE SET title = excluded.title, year = excluded.year, rati
     overview = excluded.overview, poster = excluded.poster,
     runtime = COALESCE(excluded.runtime, runtime), provider = COALESCE(excluded.provider, provider)
 """
-COLUMNS = "id, title, year, rating, overview, poster, runtime, provider, picked, likes, dislikes, last_picked"
+COLUMNS = "id, title, year, rating, overview, poster, runtime, provider, picked, likes, dislikes"
 
 
 class Stats:
@@ -36,20 +36,18 @@ class Stats:
         self.lock = threading.Lock()
         with self.lock, self.db:
             self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=NORMAL")
             self.db.execute(SCHEMA)
 
-    def _upsert(self, m: Movie) -> None:
-        self.db.execute(UPSERT, m.public())
-
-    def record_vote(self, m: Movie, yes: bool) -> None:
-        column = "likes" if yes else "dislikes"
+    def record_tally(self, m: Movie, likes: int, dislikes: int) -> None:
         with self.lock, self.db:
-            self._upsert(m)
-            self.db.execute("UPDATE movies SET %s = %s + 1 WHERE id = ?" % (column, column), (m.id,))
+            self.db.execute(UPSERT, m.public())
+            self.db.execute("UPDATE movies SET likes = likes + ?, dislikes = dislikes + ? WHERE id = ?",
+                            (likes, dislikes, m.id))
 
     def record_pick(self, m: Movie, now: float) -> None:
         with self.lock, self.db:
-            self._upsert(m)
+            self.db.execute(UPSERT, m.public())
             self.db.execute("UPDATE movies SET picked = picked + 1, last_picked = ? WHERE id = ?", (now, m.id))
 
     def _rows(self, order: str, limit: int) -> list[dict]:
