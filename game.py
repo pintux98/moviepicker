@@ -64,6 +64,14 @@ class Room:
         self.players: dict[str, Player] = {}
         self.host_id: str | None = None
         self.last_action = now
+        self.deck: list[Movie] = []
+        self.votes: dict[int, dict[str, bool]] = {}   # card index -> player id -> yes
+        self.resolved = 0                               # cards decided so far, in order
+        self.shortlist: list[Movie] = []
+        self.relaxed = False
+        self.no_match_streak = 0
+        self.notice: str | None = None
+        self.last_match: dict | None = None
 
     # --- helpers -------------------------------------------------------------
     def _player(self, pid: str) -> Player:
@@ -94,7 +102,9 @@ class Room:
             raise GameError("Pick a name", 400)
         if len(self.players) >= MAX_PLAYERS:
             raise GameError("Room is full", 409)
-        p = Player(secrets.token_urlsafe(8), name, now, now)
+        if self.phase == "winner":
+            raise GameError("This room already picked its movie", 409)
+        p = Player(secrets.token_urlsafe(8), name, now, now, cursor=self.resolved)
         self.players[p.id] = p
         if self.host_id is None:
             self.host_id = p.id
@@ -112,6 +122,8 @@ class Room:
         if now - self.last_action >= IDLE_CLOSE:
             self.phase = "closed"
             return
+        if self.phase == "swiping":
+            self._resolve(now)  # someone going away can complete a card
         host = self.players.get(self.host_id)
         if host is None or now - host.last_seen > AWAY:
             active = sorted(self.active(now), key=lambda p: p.joined)
@@ -144,6 +156,59 @@ class Room:
     def _begin_swiping(self) -> None:
         self.phase = "swiping"
 
+    # --- swiping -------------------------------------------------------------
+    def add_cards(self, movies: list[Movie]) -> None:
+        have = {m.id for m in self.deck}
+        for m in movies:
+            if m.id not in have:
+                self.deck.append(m)
+                have.add(m.id)
+
+    def _cursor(self, p: Player) -> int:
+        return max(p.cursor, self.resolved)
+
+    def needs_cards(self, now: float) -> bool:
+        if self.phase not in ("genres", "swiping"):
+            return False
+        cursors = [self._cursor(p) for p in self.active(now)] or [self.resolved]
+        return max(cursors) + 10 >= len(self.deck)
+
+    def swipe(self, pid: str, index: int, yes: bool, now: float) -> None:
+        p = self._act(pid, now)
+        if self.phase != "swiping":
+            raise GameError("Not swiping right now", 409)
+        c = self._cursor(p)
+        if index != c or c >= len(self.deck) or c >= self.resolved + MAX_LEAD:
+            return  # double tap, stale screen or too far ahead: ignore
+        self.votes.setdefault(c, {})[pid] = bool(yes)
+        p.cursor = c + 1
+        self._resolve(now)
+
+    def _resolve(self, now: float) -> None:
+        """Decide cards in order once every active player has voted on them."""
+        while self.phase == "swiping" and self.resolved < len(self.deck):
+            active = self.active(now)
+            votes = self.votes.get(self.resolved, {})
+            if not active or any(p.id not in votes for p in active):
+                return
+            yes = sum(votes[p.id] for p in active)
+            movie = self.deck[self.resolved]
+            self.resolved += 1
+            if yes >= threshold(len(active), self.relaxed):
+                self.shortlist.append(movie)
+                self.no_match_streak = 0
+                self.last_match = {"seq": len(self.shortlist), "title": movie.title, "yes": yes, "of": len(active)}
+                if len(self.shortlist) >= SHORTLIST_SIZE:
+                    self._begin_tournament(now)
+            else:
+                self.no_match_streak += 1
+                if self.no_match_streak >= RELAX_AFTER and not self.relaxed:
+                    self.relaxed = True
+                    self.notice = "Loosening up: majority now counts"
+
+    def _begin_tournament(self, now: float) -> None:
+        self.phase = "tournament"
+
     def genre_weights(self, now: float) -> dict[int, int]:
         w: dict[int, int] = {}
         for p in self.active(now):
@@ -168,4 +233,17 @@ class Room:
                          "away": now - p.last_seen > AWAY}
                         for p in sorted(self.players.values(), key=lambda p: p.joined)],
             "max_players": MAX_PLAYERS,
+            "shortlist": [m.public() for m in self.shortlist],
+            "relaxed": self.relaxed,
+            "notice": self.notice,
+            "last_match": self.last_match,
+            **self._swipe_view(me),
         }
+
+    def _swipe_view(self, me: Player) -> dict:
+        if self.phase != "swiping":
+            return {"cards": [], "ahead": False}
+        c = self._cursor(me)
+        ahead = c >= self.resolved + MAX_LEAD or c >= len(self.deck)
+        cards = [] if ahead else [dict(m.public(), index=i) for i, m in enumerate(self.deck[c:c + 5], start=c)]
+        return {"cards": cards, "ahead": ahead}
