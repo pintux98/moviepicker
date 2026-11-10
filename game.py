@@ -180,7 +180,7 @@ class Room:
         return max(p.cursor, self.resolved)
 
     def needs_cards(self, now: float) -> bool:
-        if self.phase not in ("genres", "swiping"):
+        if self.phase != "swiping":  # not before genres are picked, or the deck ignores them
             return False
         cursors = [self._cursor(p) for p in self.active(now)] or [self.resolved]
         return max(cursors) + 10 >= len(self.deck)

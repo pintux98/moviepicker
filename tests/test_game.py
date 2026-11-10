@@ -218,6 +218,12 @@ class Swiping(unittest.TestCase):
         self.assertEqual(r.resolved, 8)
         self.assertEqual(len(r.shortlist), 1)
 
+    def test_no_cards_fetched_before_genres_are_in(self):
+        r, (a, b) = room_with(2)
+        r.start(a.id, 0)
+        self.assertEqual(r.phase, "genres")
+        self.assertFalse(r.needs_cards(0))
+
     def test_needs_cards(self):
         r, (a, b) = swiping_room(2, cards=12)
         a.cursor = 3

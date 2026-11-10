@@ -50,7 +50,7 @@ class ApiBase(unittest.TestCase):
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
         c.request(method, path, body=data, headers=headers)
         r = c.getresponse()
-        text = r.read().decode()
+        text = r.read().decode("utf-8", "replace")
         c.close()
         try:
             return r.status, json.loads(text)
@@ -155,6 +155,10 @@ class Api(ApiBase):
             s, body = self.call("GET", path)
             self.assertEqual(s, 200)
             self.assertIn("Moviepicker", body)
+
+    def test_icons(self):
+        for path in ("/favicon.ico", "/apple-touch-icon.png", "/static/favicon.svg"):
+            self.assertEqual(self.call("GET", path)[0], 200, path)
 
     def test_unknown_player_403(self):
         code, a = self.create()

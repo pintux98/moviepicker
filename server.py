@@ -3,6 +3,7 @@
 Env: TMDB_TOKEN (required), PORT (default 8000).
 """
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 import random
 import re
@@ -102,7 +103,8 @@ class App:
             batch = build_batch(self.tmdb, weights, exclude, meta["seed"], meta["page"])
             if not batch:  # this genre mix ran out: widen to every genre
                 batch = build_batch(self.tmdb, {}, exclude, meta["seed"], meta["page"])
-            batch = [self.tmdb.details(m) for m in batch]
+            with ThreadPoolExecutor(8) as pool:  # runtime + RO provider per movie, in parallel
+                batch = list(pool.map(self.tmdb.details, batch))
             with self.lock:
                 room.add_cards(batch)
                 meta["page"] += 1
@@ -205,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
             if STATIC not in f.parents or not f.is_file():
                 f = None
         elif path in ("/favicon.ico", "/apple-touch-icon.png"):
-            f = STATIC / path.lstrip("/")
+            f = STATIC / "apple-touch-icon.png"  # a PNG works as favicon.ico in every current browser
         else:
             f = None
         if f is None or not f.is_file():
