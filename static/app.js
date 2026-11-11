@@ -334,7 +334,7 @@ function genresScreen(s) {
       s.solo ? null : h("p", { class: "muted small" }, `${ready} of ${here.length} ready`),
       s.me.ready
         ? h("button", { disabled: true }, "Waiting for the others")
-        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, s.solo ? "Start swiping" : "I'm ready"),
+        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, s.solo ? "Start picking" : "I'm ready"),
       s.solo ? h("button", { class: "ghost", onclick: () => act("close") }, "Cancel")
         : s.host && here.length > 1 ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start without waiting") : null));
 }
@@ -343,10 +343,10 @@ function lateGenresScreen() {
   if (!picked) picked = new Set();
   show(
     h("h2", {}, "What are you in the mood for?"),
-    h("p", { class: "muted" }, "Pick what you're in the mood for, then start swiping."),
+    h("p", { class: "muted" }, "Pick what you're in the mood for, then start picking."),
     genreChips(),
     h("div", { class: "bottom" },
-      h("button", { onclick: async () => { lateGenresSent = true; await act("genres", { ids: [...picked] }); } }, "Start swiping")));
+      h("button", { onclick: async () => { lateGenresSent = true; await act("genres", { ids: [...picked] }); } }, "Start picking")));
 }
 
 function matchesBar(s) {

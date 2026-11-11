@@ -1,6 +1,6 @@
 # Moviepicker
 
-Pick a movie together. Everyone joins a room from their phone, picks genres and swipes yes or no on movies. Matches go into a quick head-to-head tournament, and the winner is tonight's movie.
+Pick a movie together. Everyone joins a room from their phone, picks genres and votes yes or no on movies. Matches go into a quick head-to-head tournament, and the winner is tonight's movie.
 
 **Try it: [moviepicker.pintux.org](https://moviepicker.pintux.org)**
 
@@ -79,7 +79,7 @@ Stats live in SQLite at `$DATA_DIR/stats.db` (`/data` in the container). Mount a
 
 ## Metrics
 
-`http://<container>:8001/metrics` serves Prometheus counters: visits (page loads through Cloudflare), rooms created (group / just me), players joined, games finished, swipes (yes / no), plus rooms open and people online right now. All anonymous. Don't route this port to the internet; map it to `127.0.0.1` on the host and let Prometheus scrape it there.
+`http://<container>:8001/metrics` serves Prometheus counters: visits (page loads through Cloudflare), rooms created (group / just me), players joined, games finished, yes / no votes, plus rooms open and people online right now. All anonymous. Don't route this port to the internet; map it to `127.0.0.1` on the host and let Prometheus scrape it there.
 
 ## Tests
 
