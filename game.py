@@ -254,6 +254,10 @@ class Room:
                     self.relaxed = True
                     self.notice = "Loosening up: majority now counts"
         if self.phase == "swiping" and self.resolved >= MAX_DECK:
+            if not self.shortlist:
+                liked = sorted((i for i, v in self.votes.items() if any(v.values())),
+                               key=lambda i: (-sum(self.votes[i].values()), -self.deck[i].rating))
+                self.shortlist = [self.deck[i] for i in liked[:SHORTLIST_SIZE]]
             if self.shortlist:
                 self._begin_tournament(now)
             else:

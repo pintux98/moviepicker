@@ -237,6 +237,13 @@ class Swiping(unittest.TestCase):
         r.swipe(b.id, MAX_DECK - 1, False, 1)
         self.assertEqual(r.phase, "winner")
 
+    def test_end_of_capped_deck_votes_on_liked_cards(self):
+        r, ps = swiping_room(3, cards=MAX_DECK)
+        for i in range(MAX_DECK):
+            for n, p in enumerate(ps):
+                r.swipe(p.id, i, n == i % 3, 1)
+        self.assertIn(r.phase, ("tournament", "winner"))
+
     def test_end_of_capped_deck_without_match_closes(self):
         r, (a,) = swiping_room(1, cards=MAX_DECK)
         for i in range(MAX_DECK):

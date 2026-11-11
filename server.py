@@ -81,7 +81,7 @@ class App:
                 sys.stderr.write("stats: %r\n" % e)
 
     def janitor(self, now: float) -> None:
-        if now - self.swept < 1:
+        if 0 <= now - self.swept < 1:
             return
         self.swept = now
         for room in list(self.rooms.values()):
