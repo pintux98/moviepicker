@@ -266,6 +266,19 @@ function qrImage(code) {
   } catch { return null; }
 }
 
+async function shareInvite(code) {
+  const url = location.origin + "/r/" + code;
+  try {
+    if (navigator.share) return await navigator.share({ title: "Moviepicker", text: "Join my movie room: " + code, url });
+    await navigator.clipboard.writeText(url);
+    toast("Invite link copied");
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    getSelection().selectAllChildren(document.getElementById("invite"));
+    toast("Copy the link above");
+  }
+}
+
 function playerChips(s) {
   return h("div", { class: "players" }, s.players.map((p) =>
     h("span", { class: "chip" + (p.host ? " host" : "") + (p.away ? " away" : "") },
@@ -279,14 +292,9 @@ function lobbyScreen(s) {
     h("h2", {}, "Your room"),
     h("div", { class: "ticket big", "aria-label": "Room code " + s.code.split("").join(" ") }, h("span", { class: "label" }, "ROOM"), s.code),
     qrImage(s.code),
-    h("p", { class: "muted" }, "Scan the code or type it on the other phones."),
-    h("button", { class: "ghost share", onclick: async () => {
-      const url = location.origin + "/r/" + s.code;
-      try {
-        if (navigator.share) await navigator.share({ title: "Moviepicker", text: "Join my movie room: " + s.code, url });
-        else { await navigator.clipboard.writeText(url); toast("Invite link copied"); }
-      } catch {}
-    } }, "Share invite link"),
+    h("p", { class: "muted" }, "Scan the code or open this link:"),
+    h("p", { class: "invite", id: "invite" }, location.host + "/r/" + s.code),
+    h("button", { class: "alt", onclick: () => shareInvite(s.code) }, "Share invite link"),
     playerChips(s),
     h("p", { class: "muted small" }, `${s.players.length} / ${s.max_players}`),
     h("div", { class: "bottom" },

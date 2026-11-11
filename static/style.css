@@ -58,6 +58,7 @@ input.code { font-size: 28px; letter-spacing: .2em; text-align: center; text-tra
 
 .roomcode { font-size: 40px; font-weight: 850; letter-spacing: .15em; text-align: center; color: var(--gold); padding-left: .15em; font-variant-numeric: tabular-nums; }
 .qr { width: 168px; height: 168px; margin: 0 auto; border-radius: 12px; background: #fff; padding: 8px; image-rendering: pixelated; }
+.invite { text-align: center; font-weight: 700; color: var(--text); user-select: all; overflow-wrap: anywhere; }
 .players { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 8px 12px; border-radius: 999px; background: var(--panel);
   border: 1px solid var(--line); font-size: 14px; min-height: 40px; color: var(--text); font-weight: 500; }
