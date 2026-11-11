@@ -64,8 +64,9 @@ def threshold(n: int, relaxed: bool) -> int:
 
 
 class Room:
-    def __init__(self, code: str, now: float):
+    def __init__(self, code: str, now: float, solo: bool = False):
         self.code = code
+        self.solo = solo
         self.phase = "lobby"
         self.players: dict[str, Player] = {}
         self.host_id: str | None = None
@@ -108,6 +109,8 @@ class Room:
         name = clean_name(name)
         if not name:
             raise GameError("Pick a name", 400)
+        if self.solo and self.players:
+            raise GameError("This room is private", 409)
         if any(p.name.casefold() == name.casefold() for p in self.players.values()):
             raise GameError("Someone already has that name", 409)
         if len(self.players) >= MAX_PLAYERS:
@@ -349,6 +352,7 @@ class Room:
                          "away": now - p.last_seen > AWAY}
                         for p in sorted(self.players.values(), key=lambda p: p.joined)],
             "max_players": MAX_PLAYERS,
+            "solo": self.solo,
             "shortlist": [m.public() for m in self.shortlist],
             "relaxed": self.relaxed,
             "notice": self.notice,

@@ -45,6 +45,12 @@ class App:
         self.pending: list[tuple] = []
         self.last_pick: dict[str, float] = {}
         self.lock = threading.Lock()
+        self.counts = dict.fromkeys(("visits", "rooms_group", "rooms_solo", "players", "games", "swipes_yes", "swipes_no"), 0)
+        self.counts_lock = threading.Lock()
+
+    def count(self, key: str, n: int = 1) -> None:
+        with self.counts_lock:
+            self.counts[key] += n
 
     def drain(self, room: Room) -> list[tuple]:
         owner = self.meta.get(room.code, {}).get("owner")
@@ -54,8 +60,12 @@ class App:
         for kind, movie, data, owner in events:
             try:
                 if kind == "tally":
+                    self.count("swipes_yes", data[0])
+                    self.count("swipes_no", data[1])
                     self.stats.record_tally(movie, *data)
-                elif now - self.last_pick.get(owner, -PICK_WINDOW) >= PICK_WINDOW:
+                    continue
+                self.count("games")
+                if now - self.last_pick.get(owner, -PICK_WINDOW) >= PICK_WINDOW:
                     self.last_pick[owner] = now
                     self.stats.record_pick(movie, now)
             except sqlite3.Error as e:
@@ -92,7 +102,7 @@ class App:
             raise GameError("This room is closed", 404)
         return room
 
-    def create(self, name, client: str, now: float) -> dict:
+    def create(self, name, client: str, now: float, solo: bool = False) -> dict:
         self.janitor(now)
         recent = [t for t in self.created.get(client, []) if now - t < CREATE_WINDOW]
         if len(recent) >= CREATE_LIMIT or \
@@ -103,12 +113,37 @@ class App:
         code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LEN))
         while code in self.rooms:
             code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LEN))
-        room = Room(code, now)
+        room = Room(code, now, solo)
         player = room.add_player(name, now)
+        if solo:
+            room.start(player.id, now)
         self.created[client] = recent + [now]
         self.rooms[code] = room
         self.meta[code] = {"seed": random.randrange(1 << 30), "page": 1, "refilling": False, "owner": client}
+        self.count("rooms_solo" if solo else "rooms_group")
+        self.count("players")
         return {"code": code, "pid": player.id}
+
+    def metrics(self, now: float) -> str:
+        with self.lock:
+            open_rooms = len(self.rooms)
+            online = sum(len(r.active(now)) for r in self.rooms.values())
+        with self.counts_lock:
+            c = dict(self.counts)
+        lines = [
+            ("visits_total", "counter", "Page loads", [("", c["visits"])]),
+            ("rooms_created_total", "counter", "Rooms created", [('{mode="group"}', c["rooms_group"]), ('{mode="solo"}', c["rooms_solo"])]),
+            ("players_joined_total", "counter", "Players who entered a room", [("", c["players"])]),
+            ("games_finished_total", "counter", "Rooms that picked a winner", [("", c["games"])]),
+            ("swipes_total", "counter", "Decided card votes", [('{vote="yes"}', c["swipes_yes"]), ('{vote="no"}', c["swipes_no"])]),
+            ("rooms_open", "gauge", "Rooms open right now", [("", open_rooms)]),
+            ("players_online", "gauge", "Players active in the last minute", [("", online)]),
+        ]
+        out = []
+        for name, kind, help_text, samples in lines:
+            out += ["# HELP moviepicker_%s %s" % (name, help_text), "# TYPE moviepicker_%s %s" % (name, kind)]
+            out += ["moviepicker_%s%s %d" % (name, labels, value) for labels, value in samples]
+        return "\n".join(out) + "\n"
 
     def action(self, room: Room, pid: str, body: dict, now: float, genre_ids: set[int]) -> None:
         kind = body.get("type")
@@ -242,7 +277,7 @@ class Handler(BaseHTTPRequestHandler):
             genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
             with app.lock:
                 if method == "POST" and path == "/api/rooms":
-                    return self._json(200, app.create(body.get("name"), client, now))
+                    return self._json(200, app.create(body.get("name"), client, now, body.get("solo") is True))
                 m = re.fullmatch(r"/api/rooms/([^/]+)(/join|/action)?", path)
                 if not m:
                     raise GameError("Not found", 404)
@@ -252,6 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                     room = app.room(m.group(1), now, pid)
                 if method == "POST" and m.group(2) == "/join":
                     p = room.add_player(body.get("name"), now)
+                    app.count("players")
                     out = {"code": room.code, "pid": p.id}
                 elif method == "POST" and m.group(2) == "/action":
                     app.action(room, pid, body, now, genre_ids)
@@ -276,6 +312,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(parts.path)
         if path == "/" or re.fullmatch(r"/r/[A-Za-z2-9]{6}", path):
+            if self.command == "GET":
+                self.app.count("visits")
             return self._send(200, index_page(), TYPES[".html"], {"Cache-Control": "no-store"})
         if path.startswith("/static/"):
             f = (STATIC / path[len("/static/"):]).resolve()
@@ -322,6 +360,33 @@ def open_stats(path: str) -> Stats:
         return Stats(":memory:")
 
 
+class MetricsHandler(BaseHTTPRequestHandler):
+    server_version = "moviepicker"
+    sys_version = ""
+    timeout = 15
+    app: App
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        if self.path != "/metrics":
+            self.send_error(404)
+            return
+        body = self.app.metrics(clock()).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def make_metrics_server(host: str, port: int, app: App) -> ThreadingHTTPServer:
+    srv = ThreadingHTTPServer((host, port), type("BoundMetrics", (MetricsHandler,), {"app": app}))
+    srv.daemon_threads = True
+    return srv
+
+
 def make_server(host: str, port: int, tmdb, stats: Stats) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"app": App(tmdb, stats)})
     srv = ThreadingHTTPServer((host, port), handler)
@@ -340,7 +405,11 @@ def main() -> None:
     except OSError:
         pass
     print("moviepicker on :%d" % port, flush=True)
-    make_server("0.0.0.0", port, Tmdb(token), open_stats(str(data / "stats.db"))).serve_forever()
+    srv = make_server("0.0.0.0", port, Tmdb(token), open_stats(str(data / "stats.db")))
+    metrics_port = int(os.environ.get("METRICS_PORT", "8001"))
+    threading.Thread(target=make_metrics_server("0.0.0.0", metrics_port, srv.RequestHandlerClass.app).serve_forever,
+                     daemon=True).start()
+    srv.serve_forever()
 
 
 if __name__ == "__main__":

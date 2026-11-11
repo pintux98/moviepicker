@@ -133,8 +133,7 @@ main:has(> .card) { gap: 10px; }
 .hero.compact .muted { display: none; }
 .hero h1 { font-size: 28px; }
 .small-logo { font-size: 40px; margin-top: 0; }
-.home-actions { position: sticky; bottom: 0; z-index: 2; padding: 16px 0 max(12px, env(safe-area-inset-bottom));
-  background: linear-gradient(to bottom, transparent, #1f060c 30%); }
+.home-actions { padding: 16px 0 max(4px, env(safe-area-inset-bottom)); gap: 6px; }
 .attrib { padding-top: 14px; }
 .stats-home { display: flex; flex-direction: column; gap: 8px; }
 .stats-home h3 { margin: 6px 0 0; font-size: 15px; color: var(--text); font-weight: 700; }
@@ -253,3 +252,4 @@ main.fade > *:nth-child(n+4) { animation-delay: .09s; }
 .ticket.big .label { font-size: 13px; letter-spacing: .04em; }
 .winner .marquee { margin-bottom: 4px; }
 @keyframes bulbs { 0% { opacity: .15; } 30% { opacity: 1; } 55% { opacity: .35; } 100% { opacity: 1; } }
+.just-me { min-height: 40px; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgb(255 201 60 / .5); }

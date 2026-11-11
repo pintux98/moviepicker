@@ -10,6 +10,14 @@ def room_with(n, now=0.0):
 
 
 class Basics(unittest.TestCase):
+    def test_solo_room_is_private(self):
+        r = Room("ABCDEF", 0, solo=True)
+        r.add_player("me", 0)
+        with self.assertRaises(GameError) as e:
+            r.add_player("intruder", 0)
+        self.assertEqual(e.exception.status, 409)
+        self.assertTrue(r.state_for(next(iter(r.players)), 0)["solo"])
+
     def test_threshold(self):
         for n, want in [(1, 1), (2, 2), (3, 2), (4, 3), (5, 4), (10, 7)]:
             self.assertEqual(threshold(n, False), want, n)

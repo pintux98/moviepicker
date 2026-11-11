@@ -3,7 +3,7 @@ WORKDIR /app
 COPY game.py tmdb.py stats.py server.py ./
 COPY static ./static
 RUN mkdir /data && chown nobody:nobody /data
-ENV PYTHONUNBUFFERED=1 PORT=8000 DATA_DIR=/data
+ENV PYTHONUNBUFFERED=1 PORT=8000 METRICS_PORT=8001 DATA_DIR=/data
 VOLUME /data
 USER nobody
 EXPOSE 8000

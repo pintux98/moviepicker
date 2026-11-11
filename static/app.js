@@ -71,7 +71,7 @@ async function act(type, extra = {}) {
 function onState() {
   const s = state;
   if (s.last_match) {
-    if (seenMatch !== null && s.last_match.seq > seenMatch) toast(`It's a match: ${s.last_match.title} (${s.last_match.yes} of ${s.last_match.of} said yes)`);
+    if (seenMatch !== null && s.last_match.seq > seenMatch && !s.solo) toast(`It's a match: ${s.last_match.title} (${s.last_match.yes} of ${s.last_match.of} said yes)`);
     seenMatch = s.last_match.seq;
   } else if (seenMatch === null) seenMatch = 0;
   const key = JSON.stringify(s) + "|" + lateGenresSent;
@@ -201,7 +201,9 @@ async function homeScreen() {
     h("div", { class: "bottom home-actions" },
       h("div", { class: "row-2" },
         h("button", { onclick: createScreen }, "New room"),
-        h("button", { class: "alt", onclick: () => joinScreen("") }, "Join"))),
+        h("button", { class: "alt", onclick: () => joinScreen("") }, "Join")),
+      h("button", { class: "ghost just-me", onclick: () => enter(() => api("POST", "/api/rooms", { name: load("mp-name") || "Me", solo: true })) },
+        "Just me: pick a movie alone")),
     h("p", { class: "attrib" }, "This product uses the TMDB API but is not endorsed or certified by TMDB. Movie data from ",
       h("a", { href: "https://www.themoviedb.org/", target: "_blank", rel: "noopener noreferrer" }, "themoviedb.org"), "."));
   draw(null);
@@ -317,15 +319,16 @@ function genresScreen(s) {
     h("h2", {}, "What are you in the mood for?"),
     h("p", { class: "muted" }, "Pick as many as you like."),
     genreChips(),
-    h("section", { class: "people" },
+    s.solo ? null : h("section", { class: "people" },
       h("h3", {}, "In this room"),
       playerChips(s)),
     h("div", { class: "bottom" },
-      h("p", { class: "muted small" }, `${ready} of ${here.length} ready`),
+      s.solo ? null : h("p", { class: "muted small" }, `${ready} of ${here.length} ready`),
       s.me.ready
         ? h("button", { disabled: true }, "Waiting for the others")
-        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, "I'm ready"),
-      s.host && here.length > 1 ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start without waiting") : null));
+        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, s.solo ? "Start swiping" : "I'm ready"),
+      s.solo ? h("button", { class: "ghost", onclick: () => act("close") }, "Cancel")
+        : s.host && here.length > 1 ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start without waiting") : null));
 }
 
 function lateGenresScreen() {
@@ -364,7 +367,8 @@ function swipeScreen(s) {
         if (confirm(`Start the vote with ${n} match${n > 1 ? "es" : ""}?`)) act("start_tournament");
       } }, `Vote now (${s.shortlist.length})`) : null;
   const topbar = h("div", { class: "topbar" },
-    h("span", { class: "ticket code-chip", "aria-label": "Room code " + s.code.split("").join(" ") }, h("span", { class: "label" }, "ROOM"), s.code),
+    s.solo ? h("span", { class: "ticket code-chip" }, h("span", { class: "label" }, "JUST ME"))
+      : h("span", { class: "ticket code-chip", "aria-label": "Room code " + s.code.split("").join(" ") }, h("span", { class: "label" }, "ROOM"), s.code),
     hostVote);
   if (!s.cards.length) {
     return show(topbar, notice,
@@ -479,13 +483,15 @@ function winnerScreen(s) {
       h("div", { class: "meta center" }, stars(m), runtime(m.runtime), provider(m)),
       watchLink(m)),
     h("div", { class: "bottom" },
-      s.host ? h("button", { onclick: () => act("close") }, "Close room") : null,
-      leave()));
+      s.solo ? h("button", { onclick: () => act("close") }, "Back to start")
+        : [s.host ? h("button", { onclick: () => act("close") }, "Close room") : null, leave()]));
 }
 
 function closedScreen() {
+  const solo = state && state.solo;
+  state = null;
   homeScreen();
-  toast("The room was closed");
+  if (!solo) toast("The room was closed");
 }
 
 (function boot() {

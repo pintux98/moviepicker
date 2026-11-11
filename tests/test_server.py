@@ -101,6 +101,39 @@ class Api(ApiBase):
         self.solo_game("3.3.3.4")
         self.assertEqual(picks(), 2)
 
+    def test_solo_room_starts_at_genres_and_is_private(self):
+        s, d = self.call("POST", "/api/rooms", {"name": "Me", "solo": True})
+        self.assertEqual(s, 200)
+        st = self.state(d["code"], d["pid"])[1]
+        self.assertEqual((st["phase"], st["solo"]), ("genres", True))
+        self.assertEqual(self.call("POST", "/api/rooms/%s/join" % d["code"], {"name": "Bob"})[0], 409)
+
+    def test_metrics_only_on_private_port(self):
+        app = self.srv.RequestHandlerClass.app
+        msrv = server.make_metrics_server("127.0.0.1", 0, app)
+        threading.Thread(target=msrv.serve_forever, daemon=True).start()
+        try:
+            self.call("GET", "/")
+            self.call("HEAD", "/")
+            self.call("POST", "/api/rooms", {"name": "Me", "solo": True}, ip="2.2.2.1")
+            code, a = self.create(ip="2.2.2.2")
+            self.call("POST", "/api/rooms/%s/join" % code, {"name": "Bob"})
+            c = http.client.HTTPConnection("127.0.0.1", msrv.server_address[1], timeout=5)
+            c.request("GET", "/metrics")
+            r = c.getresponse()
+            text = r.read().decode()
+            c.close()
+            self.assertEqual(r.status, 200)
+            for line in ('moviepicker_visits_total 1', 'moviepicker_rooms_created_total{mode="solo"} 1',
+                         'moviepicker_rooms_created_total{mode="group"} 1', 'moviepicker_players_joined_total 3',
+                         'moviepicker_rooms_open 2', 'moviepicker_games_finished_total 0',
+                         'moviepicker_swipes_total{vote="yes"} 0'):
+                self.assertIn(line + "\n", text)
+            self.assertEqual(self.call("GET", "/metrics")[0], 404)
+        finally:
+            msrv.shutdown()
+            msrv.server_close()
+
     def test_stats_empty(self):
         self.assertEqual(self.call("GET", "/api/stats"), (200, {"top": [], "recent": []}))
 
