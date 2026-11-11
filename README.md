@@ -5,6 +5,7 @@ Pick a movie together. Everyone joins a room from their phone, picks genres and 
 **Try it: [moviepicker.pintux.org](https://moviepicker.pintux.org)**
 
 - 2 to 10 players, no accounts: a 6-character room code (or QR code) and a nickname
+- Alone? **Just me** skips the room and goes straight to picking
 - English-language feature films from [TMDB](https://www.themoviedb.org/), with a "where to stream" hint for Romania
 - Python standard library only, no database, about 20 MB of RAM
 
@@ -16,6 +17,8 @@ A TMDB API Read Access Token (free): create an account at themoviedb.org, then S
 |---|---|---|
 | `TMDB_TOKEN` | yes | |
 | `PORT` | no | `8000` |
+| `METRICS_PORT` | no | `8001` (Prometheus metrics, keep it private) |
+| `DATA_DIR` | no | `data` (`/data` in Docker) |
 
 ## Run with Coolify
 
@@ -73,6 +76,10 @@ The home page shows the most picked and the latest picked movies.
 - Only movie data and counts are stored: no names, rooms or IP addresses.
 
 Stats live in SQLite at `$DATA_DIR/stats.db` (`/data` in the container). Mount a volume there to keep them across deploys (in Coolify: **Persistent Storage**, destination `/data`). If the folder isn't writable, the app keeps running and stats stay in memory.
+
+## Metrics
+
+`http://<container>:8001/metrics` serves Prometheus counters: visits (page loads through Cloudflare), rooms created (group / just me), players joined, games finished, swipes (yes / no), plus rooms open and people online right now. All anonymous. Don't route this port to the internet; map it to `127.0.0.1` on the host and let Prometheus scrape it there.
 
 ## Tests
 
