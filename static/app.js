@@ -182,12 +182,20 @@ function statsSection(stats) {
     h("div", { class: "strip" }, stats.recent.map(tile)));
 }
 
+let bulbsLit = false;
+function marquee(lines, small, tag = "h1", label = "Moviepicker") {
+  const sign = h("div", { class: "marquee" + (small ? " small" : "") + (bulbsLit ? "" : " lit") },
+    h(tag, { class: "wordmark", "aria-label": label }, lines.flatMap((l, i) => (i ? [h("br"), l] : [l]))));
+  bulbsLit = true;
+  return sign;
+}
+
 async function homeScreen() {
   history.replaceState(null, "", "/");
+  document.querySelectorAll(".confetti").forEach((c) => c.remove());
   const draw = (stats) => show(
     h("div", { class: "hero" + (stats && stats.top.length ? " compact" : "") },
-      brand("hero-logo"),
-      h("h1", {}, "Moviepicker"),
+      marquee(stats && stats.top.length ? ["MOVIEPICKER"] : ["MOVIE", "PICKER"], stats && stats.top.length),
       h("p", { class: "muted" }, "Find a movie everyone wants to watch.")),
     statsSection(stats),
     h("div", { class: "bottom home-actions" },
@@ -266,8 +274,8 @@ function playerChips(s) {
 
 function lobbyScreen(s) {
   show(
-    h("h2", {}, "Room"),
-    h("div", { class: "roomcode", "aria-label": "Room code " + s.code.split("").join(" ") }, s.code),
+    h("h2", {}, "Your room"),
+    h("div", { class: "ticket big", "aria-label": "Room code " + s.code.split("").join(" ") }, h("span", { class: "label" }, "ROOM"), s.code),
     qrImage(s.code),
     h("p", { class: "muted" }, "Scan the code or type it on the other phones."),
     h("button", { class: "ghost share", onclick: async () => {
@@ -356,7 +364,7 @@ function swipeScreen(s) {
         if (confirm(`Start the vote with ${n} match${n > 1 ? "es" : ""}?`)) act("start_tournament");
       } }, `Vote now (${s.shortlist.length})`) : null;
   const topbar = h("div", { class: "topbar" },
-    h("span", { class: "code-chip", "aria-label": "Room code " + s.code.split("").join(" ") }, "Room ", h("b", {}, s.code)),
+    h("span", { class: "ticket code-chip", "aria-label": "Room code " + s.code.split("").join(" ") }, h("span", { class: "label" }, "ROOM"), s.code),
     hostVote);
   if (!s.cards.length) {
     return show(topbar, notice,
@@ -445,7 +453,7 @@ function tournamentScreen(s) {
 
 function confetti() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const colors = ["#e5484d", "#ffd166", "#2fbf71", "#4cc9f0", "#b388ff"];
+  const colors = ["#ffc93c", "#fff6d8", "#e8263a", "#ff9f1c", "#ffe08a"];
   const box = h("div", { class: "confetti", "aria-hidden": "true" });
   for (let i = 0; i < 60; i++) {
     const p = h("i");
@@ -465,7 +473,7 @@ function winnerScreen(s) {
   const m = s.winner;
   if (celebrated !== s.code) { celebrated = s.code; confetti(); }
   show(h("div", { class: "stack winner pop" },
-      h("p", { class: "eyebrow" }, "Tonight's movie"),
+      marquee(["NOW", "SHOWING"], true, "p", "Now showing"),
       h("h1", {}, titleYear(m)),
       m.poster ? h("img", { src: m.poster, alt: "" }) : null,
       h("div", { class: "meta center" }, stars(m), runtime(m.runtime), provider(m)),

@@ -82,4 +82,4 @@ python -m unittest discover -s tests
 
 ## License
 
-MIT. Movie data and images come from TMDB: this product uses the TMDB API but is not endorsed or certified by TMDB. QR codes are made with [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT).
+MIT. Movie data and images come from TMDB: this product uses the TMDB API but is not endorsed or certified by TMDB. QR codes are made with [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT). Fonts: [Monoton](https://fonts.google.com/specimen/Monoton) and [Rubik](https://fonts.google.com/specimen/Rubik), both under the SIL Open Font License, bundled in `static/fonts`.

@@ -271,6 +271,15 @@ class Api(ApiBase):
         self.assertIn("immutable", r.getheader("Cache-Control"))
         c.close()
 
+    def test_head_requests_answer_like_get_without_body(self):
+        for path in ("/", "/static/app.js"):
+            c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("HEAD", path)
+            r = c.getresponse()
+            self.assertEqual((r.status, r.read()), (200, b""), path)
+            self.assertGreater(int(r.getheader("Content-Length")), 0)
+            c.close()
+
     def test_icons(self):
         for path in ("/favicon.ico", "/apple-touch-icon.png", "/static/favicon.svg"):
             self.assertEqual(self.call("GET", path)[0], 200, path)

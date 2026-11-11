@@ -29,7 +29,7 @@ MISS_LIMIT, MISS_WINDOW = 20, 600
 PICK_WINDOW = 86400
 REFILL_NOTICE = "Couldn't load more movies, retrying…"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
+         ".svg": "image/svg+xml", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json"}
 CSP = ("default-src 'self'; img-src 'self' https://image.tmdb.org data:; style-src 'self'; script-src 'self'; "
        "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 
@@ -191,7 +191,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _json(self, status: int, data) -> None:
         self._send(status, json.dumps(data).encode(), "application/json", {"Cache-Control": "no-store"})
@@ -295,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
             self._api("GET")
         else:
             self._static()
+
+    do_HEAD = do_GET
 
     def do_POST(self):
         if self.path.startswith("/api/"):
