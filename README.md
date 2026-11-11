@@ -1,6 +1,6 @@
 # Moviepicker
 
-Pick a movie together. Everyone joins a room from their phone, picks genres and votes yes or no on movies. Matches go into a quick head-to-head tournament, and the winner is tonight's movie.
+Pick a movie together. Everyone joins a room from their phone, picks genres or types one word (like "heist"), and swipes yes or no on movies. Matches go into a quick head-to-head vote or onto a wheel the host spins, and tonight's movie is revealed with a card flip.
 
 **Try it: [moviepicker.pintux.org](https://moviepicker.pintux.org)**
 

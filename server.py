@@ -15,7 +15,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from game import MAX_ROOMS, GameError, Room
+from game import MAX_ROOMS, GameError, Room, clean_name
 from stats import Stats
 from tmdb import MAX_PAGE, Tmdb, build_batch
 
@@ -157,9 +157,15 @@ class App:
             out += ["moviepicker_%s%s %d" % (name, labels, value) for labels, value in samples]
         return "\n".join(out) + "\n"
 
-    def action(self, room: Room, pid: str, body: dict, now: float, genre_ids: set[int]) -> None:
+    def action(self, room: Room, pid: str, body: dict, now: float, genre_ids: set[int], keyword_ids: list[int]) -> None:
         kind = body.get("type")
-        if kind == "genres":
+        if kind == "mood":
+            room.set_mood(pid, clean_name(body.get("word")), keyword_ids, now)
+        elif kind == "finale":
+            room.set_finale(pid, body.get("mode"), now)
+        elif kind == "spin":
+            room.spin(pid, now)
+        elif kind == "genres":
             ids = body.get("ids")
             if isinstance(ids, list) and not set(i for i in ids if isinstance(i, int)) <= genre_ids:
                 raise GameError("Unknown genre", 400)
@@ -189,18 +195,18 @@ class App:
         if meta and not meta["refilling"] and meta["page"] <= MAX_PAGE and room.needs_cards(now) and \
                 self.refills.acquire(blocking=False):
             meta["refilling"] = True
-            weights = room.genre_weights(now)
+            weights, keywords = room.genre_weights(now), room.keywords(now)
             exclude = {m.id for m in room.deck}
             try:
-                threading.Thread(target=self._refill, args=(room, meta, weights, exclude), daemon=True).start()
+                threading.Thread(target=self._refill, args=(room, meta, weights, exclude, keywords), daemon=True).start()
             except BaseException:
                 meta["refilling"] = False
                 self.refills.release()
                 raise
 
-    def _refill(self, room: Room, meta: dict, weights: dict, exclude: set) -> None:
+    def _refill(self, room: Room, meta: dict, weights: dict, exclude: set, keywords: list[int]) -> None:
         try:
-            batch = build_batch(self.tmdb, weights, exclude, meta["seed"], meta["page"])
+            batch = build_batch(self.tmdb, weights, exclude, meta["seed"], meta["page"], keywords)
             if not batch:
                 batch = build_batch(self.tmdb, {}, exclude, meta["seed"], meta["page"])
             with ThreadPoolExecutor(8) as pool:
@@ -295,6 +301,14 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body() if method == "POST" else {}
             client, wide = self._client()
             genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
+            mood = re.fullmatch(r"/api/rooms/([^/]+)/action", path) if body.get("type") == "mood" else None
+            word = clean_name(body.get("word")) if mood else ""
+            if mood:
+                if pid not in getattr(app.rooms.get(mood.group(1).strip().upper()), "players", ()):
+                    raise GameError("This room is closed", 404)
+                if not word:
+                    raise GameError("Type a word", 400)
+            keyword_ids = app.tmdb.keywords(word) if word else []
             with app.lock:
                 if method == "POST" and path == "/api/rooms":
                     return self._json(200, app.create(body.get("name"), client, now, body.get("solo") is True, wide))
@@ -310,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
                     app.count("players")
                     out = {"code": room.code, "pid": p.id}
                 elif method == "POST" and m.group(2) == "/action":
-                    app.action(room, pid, body, now, genre_ids)
+                    app.action(room, pid, body, now, genre_ids, keyword_ids)
                     out = {"ok": True}
                 elif method == "GET" and m.group(2) is None:
                     room.seen(pid, now)

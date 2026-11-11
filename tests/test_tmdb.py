@@ -10,15 +10,20 @@ def result(id, genres, rating=7.0, title=None):
 
 
 class FakeFetch:
-    def __init__(self, discover=None, studio=None, details=None):
+    def __init__(self, discover=None, studio=None, details=None, keyword=None, found=None):
         self.calls = []
         self.discover, self.studio, self.details = discover or [], studio or [], details or {}
+        self.keyword, self.found = keyword or [], found or []
 
     def __call__(self, path, params):
         self.calls.append((path, dict(params)))
         if path == "genre/movie/list":
             return {"genres": [{"id": 16, "name": "Animation"}, {"id": 35, "name": "Comedy"}]}
+        if path == "search/keyword":
+            return {"results": self.found}
         if path == "discover/movie":
+            if "with_keywords" in params:
+                return {"results": self.keyword}
             return {"results": self.studio if "with_companies" in params else self.discover}
         return self.details
 
@@ -97,6 +102,29 @@ class Deck(unittest.TestCase):
         f = FakeFetch(discover=[result(i, [28]) for i in range(1, 6)], studio=[result(100, [16])])
         ids = [m.id for m in build_batch(Tmdb("t", fetch=f), {28: 2}, set(), seed=1, page=1)]
         self.assertNotIn(100, ids)
+
+    def test_keywords_keep_whole_word_matches(self):
+        f = FakeFetch(found=[{"id": 9673, "name": "love"}, {"id": 4320, "name": "lover"}, {"id": 54610, "name": "dove"},
+                             {"id": 1, "name": "love triangle"}, {"id": 2, "name": "first love"}, {"id": 3, "name": "love 2"},
+                             {"id": 4, "name": "love 3"}, {"id": 5, "name": "love 4"}])
+        self.assertEqual(Tmdb("t", fetch=f).keywords("Love"), [9673, 1, 2, 3, 4])
+        self.assertEqual(f.calls[0], ("search/keyword", {"query": "Love"}))
+
+    def test_discover_by_keywords(self):
+        f = FakeFetch(keyword=[result(1, [28])])
+        Tmdb("t", fetch=f).discover([], 1, keywords=[10051, 9882])
+        self.assertEqual(f.calls[0][1]["with_keywords"], "10051|9882")
+
+    def test_build_batch_word_only_skips_plain_discover(self):
+        f = FakeFetch(discover=[result(1, [28])], keyword=[result(i, [28]) for i in range(10, 15)])
+        ids = [m.id for m in build_batch(Tmdb("t", fetch=f), {}, {11}, seed=1, page=1, keywords=[7])]
+        self.assertEqual(sorted(ids), [10, 12, 13, 14])
+
+    def test_build_batch_mixes_word_and_genre_movies(self):
+        f = FakeFetch(discover=[result(i, [28]) for i in range(1, 21)], keyword=[result(i, [28]) for i in range(100, 120)])
+        ids = [m.id for m in build_batch(Tmdb("t", fetch=f), {28: 1}, set(), seed=1, page=1, keywords=[7])]
+        self.assertEqual(len(ids), 20)
+        self.assertEqual([i >= 100 for i in ids[:4]], [False, True, False, True])
 
 
 if __name__ == "__main__":

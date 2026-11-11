@@ -1,11 +1,12 @@
 import datetime
 import json
 import random
+import re
 import time
 import urllib.parse
 import urllib.request
 
-from game import Movie
+from game import MAX_KEYWORDS, Movie
 
 API = "https://api.themoviedb.org/3/"
 IMG = "https://image.tmdb.org/t/p/w500"
@@ -48,7 +49,13 @@ class Tmdb:
     def genres(self) -> list[dict]:
         return self._get("genre/movie/list", {"language": "en-US"})["genres"]
 
-    def discover(self, genre_ids: list[int], page: int, companies: list[int] | None = None) -> list[Movie]:
+    def keywords(self, word: str) -> list[int]:
+        whole = re.compile(r"\b%s\b" % re.escape(word.casefold()))
+        found = self._get("search/keyword", {"query": word}).get("results", [])
+        return [k["id"] for k in found if whole.search(str(k.get("name", "")).casefold())][:MAX_KEYWORDS]
+
+    def discover(self, genre_ids: list[int], page: int, companies: list[int] | None = None,
+                 keywords: list[int] | None = None) -> list[Movie]:
         params = {"language": "en-US", "with_original_language": "en", "with_runtime.gte": 60,
                   "vote_count.gte": 200, "release_date.lte": self.today or datetime.date.today().isoformat(),
                   "sort_by": "popularity.desc", "include_adult": "false", "page": page}
@@ -56,6 +63,8 @@ class Tmdb:
             params["with_genres"] = "|".join(map(str, genre_ids))
         if companies:
             params["with_companies"] = "|".join(map(str, companies))
+        if keywords:
+            params["with_keywords"] = "|".join(map(str, keywords))
         return [_movie(r) for r in self._get("discover/movie", params).get("results", [])]
 
     def details(self, m: Movie) -> Movie:
@@ -79,17 +88,24 @@ def _movie(r: dict) -> Movie:
                  genre_ids=list(r.get("genre_ids") or []))
 
 
-def build_batch(t: Tmdb, weights: dict[int, int], exclude: set[int], seed: int, page: int) -> list[Movie]:
+def _mix(base: list[Movie], extra: list[Movie], every: int) -> list[Movie]:
+    out: list[Movie] = []
+    while len(out) < BATCH and (base or extra):
+        src = extra if (len(out) % every == every - 1 and extra) or not base else base
+        out.append(src.pop(0))
+    return out
+
+
+def build_batch(t: Tmdb, weights: dict[int, int], exclude: set[int], seed: int, page: int,
+                keywords: list[int] | None = None) -> list[Movie]:
     rng = random.Random(seed + page)
     picked = sorted(g for g, w in weights.items() if w > 0)
-    base = [m for m in t.discover(picked, page) if m.id not in exclude]
+    base = [m for m in t.discover(picked, page) if m.id not in exclude] if picked or not keywords else []
     base.sort(key=lambda m: 10 * sum(weights.get(g, 0) for g in m.genre_ids) + m.rating + rng.random(), reverse=True)
+    if keywords:
+        taken = exclude | {m.id for m in base}
+        base = _mix(base, [m for m in t.discover([], page, keywords=keywords) if m.id not in taken], 2)
     if not (weights.get(ANIMATION) or weights.get(FAMILY)):
         return base[:BATCH]
     taken = exclude | {m.id for m in base}
-    anim = [m for m in t.discover([ANIMATION], page, companies=STUDIOS) if m.id not in taken]
-    out: list[Movie] = []
-    while len(out) < BATCH and (base or anim):
-        src = anim if (len(out) % 4 == 3 and anim) or not base else base
-        out.append(src.pop(0))
-    return out
+    return _mix(base, [m for m in t.discover([ANIMATION], page, companies=STUDIOS) if m.id not in taken], 4)

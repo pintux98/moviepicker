@@ -1,4 +1,5 @@
 import math
+import random
 import secrets
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -13,6 +14,8 @@ MAX_LEAD = 15
 MAX_DECK = 300
 NAME_MAX = 20
 MAX_GENRES = 32
+MAX_KEYWORDS = 5
+FINALES = ("vote", "spin")
 
 
 @dataclass
@@ -40,6 +43,8 @@ class Player:
     joined: float
     last_seen: float
     genres: list[int] = field(default_factory=list)
+    word: str = ""
+    keywords: list[int] = field(default_factory=list)
     ready: bool = False
     cursor: int = 0
 
@@ -85,6 +90,8 @@ class Room:
         self.bye: Movie | None = None
         self.pair_votes: dict[str, int] = {}
         self.winner: Movie | None = None
+        self.finale = "vote"
+        self.spins = 0
         self.events: list[tuple] = []
 
     def _player(self, pid: str) -> Player:
@@ -192,7 +199,24 @@ class Room:
             isinstance(g, int) and not isinstance(g, bool) for g in genre_ids)
         if not valid:
             raise GameError("Bad genre list", 400)
-        p.genres = sorted(set(genre_ids))
+        p.genres, p.word, p.keywords = sorted(set(genre_ids)), "", []
+
+    def set_mood(self, pid: str, word: str, keyword_ids: list[int], now: float) -> None:
+        p = self._act(pid, now)
+        if self.phase not in ("lobby", "genres", "swiping"):
+            raise GameError("Too late to change your mood", 409)
+        if not keyword_ids:
+            raise GameError("No movies for that word, try another", 400)
+        p.genres, p.word, p.keywords = [], word, keyword_ids[:MAX_KEYWORDS]
+
+    def set_finale(self, pid: str, mode: str, now: float) -> None:
+        self._act(pid, now)
+        self._host_only(pid)
+        if mode not in FINALES:
+            raise GameError("Pick vote or spin", 400)
+        if self.phase not in ("lobby", "genres", "swiping"):
+            raise GameError("Too late to change that", 409)
+        self.finale = mode
 
     def set_ready(self, pid: str, now: float) -> None:
         p = self._act(pid, now)
@@ -272,9 +296,11 @@ class Room:
 
     def _begin_tournament(self, now: float) -> None:
         e = self.shortlist[:SHORTLIST_SIZE]
-        self.phase = "tournament"
+        self.phase = "spin" if self.finale == "spin" else "tournament"
         if len(e) == 1:
             self._finish(e[0])
+        elif self.phase == "spin":
+            return
         elif len(e) == 2:
             self.matches = [self._match(e[0], e[1], "Final")]
         elif len(e) == 3:
@@ -331,6 +357,19 @@ class Room:
             finalists = [x["winner"] for x in self.matches] + ([self.bye] if self.bye else [])
             self.matches.append(self._match(finalists[0], finalists[1], "Final"))
 
+    def spin(self, pid: str, now: float) -> None:
+        self._act(pid, now)
+        self._host_only(pid)
+        options = [m for m in self.shortlist[:SHORTLIST_SIZE] if m is not self.winner]
+        if self.finale != "spin" or self.phase not in ("spin", "winner") or not options:
+            raise GameError("No spin right now", 409)
+        self.spins += 1
+        pick = random.choice(options)
+        if self.phase == "spin":
+            self._finish(pick)
+        else:
+            self.winner = pick
+
     def _finish(self, movie: Movie) -> None:
         self.winner = movie
         self.phase = "winner"
@@ -347,6 +386,9 @@ class Room:
                 w[g] = w.get(g, 0) + 1
         return w
 
+    def keywords(self, now: float) -> list[int]:
+        return sorted({k for p in self.active(now) for k in p.keywords})
+
     def close(self, pid: str, now: float) -> None:
         self._act(pid, now)
         self._host_only(pid)
@@ -357,7 +399,9 @@ class Room:
         return {
             "code": self.code,
             "phase": self.phase,
-            "me": {"name": me.name, "genres": me.genres, "ready": me.ready},
+            "me": {"name": me.name, "genres": me.genres, "word": me.word, "ready": me.ready},
+            "finale": self.finale,
+            "spins": self.spins,
             "host": pid == self.host_id,
             "players": [{"name": p.name, "ready": p.ready, "host": p.id == self.host_id,
                          "away": now - p.last_seen > AWAY}
@@ -382,8 +426,6 @@ class Room:
             "my_vote": self.pair_votes.get(pid),
             "voted": sum(p.id in self.pair_votes for p in active),
             "of": len(active),
-            "bracket": [{"a": x["a"].title, "b": x["b"].title, "round": x["round"],
-                         "winner": x["winner"].title if x["winner"] else None} for x in self.matches],
             "winner": self.winner.public() if self.winner else None,
         }
 

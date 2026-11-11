@@ -464,5 +464,100 @@ class Tournament(unittest.TestCase):
         self.assertEqual(r.phase, "closed")
 
 
+def spin_room(matches, players=2):
+    r, ps = swiping_room(players)
+    r.set_finale(ps[0].id, "spin", 0)
+    for _ in range(matches):
+        vote_all(r, ps, players)
+    if matches < 4:
+        r.start_tournament(ps[0].id, 1)
+    return r, ps
+
+
+class Finale(unittest.TestCase):
+    def test_finale_defaults_to_vote_and_is_host_only(self):
+        r, (a, b) = room_with(2)
+        self.assertEqual(r.state_for(b.id, 0)["finale"], "vote")
+        with self.assertRaises(GameError) as e:
+            r.set_finale(b.id, "spin", 0)
+        self.assertEqual(e.exception.status, 403)
+        with self.assertRaises(GameError) as e:
+            r.set_finale(a.id, "dice", 0)
+        self.assertEqual(e.exception.status, 400)
+        r.set_finale(a.id, "spin", 0)
+        self.assertEqual(r.state_for(b.id, 0)["finale"], "spin")
+
+    def test_finale_locked_once_the_pick_starts(self):
+        r, (a, b) = tournament_room(2)
+        with self.assertRaises(GameError) as e:
+            r.set_finale(a.id, "spin", 1)
+        self.assertEqual(e.exception.status, 409)
+
+    def test_spin_waits_for_host_then_picks_from_shortlist(self):
+        r, (a, b) = spin_room(4)
+        self.assertEqual((r.phase, r.state_for(a.id, 1)["spins"]), ("spin", 0))
+        with self.assertRaises(GameError) as e:
+            r.spin(b.id, 1)
+        self.assertEqual(e.exception.status, 403)
+        r.spin(a.id, 1)
+        s = r.state_for(b.id, 1)
+        self.assertEqual((s["phase"], s["spins"]), ("winner", 1))
+        self.assertIn(r.winner.id, [1, 2, 3, 4])
+        self.assertEqual([k for k, _, _ in r.drain_events() if k == "pick"], ["pick"])
+
+    def test_respin_picks_another_movie_without_a_new_pick_event(self):
+        r, (a, b) = spin_room(2)
+        r.spin(a.id, 1)
+        first = r.winner.id
+        r.drain_events()
+        r.spin(a.id, 2)
+        self.assertNotEqual(r.winner.id, first)
+        self.assertEqual(r.state_for(a.id, 2)["spins"], 2)
+        self.assertEqual(r.drain_events(), [])
+
+    def test_spin_with_one_match_wins_directly(self):
+        r, (a, b) = spin_room(1)
+        self.assertEqual((r.phase, r.winner.id), ("winner", 1))
+        with self.assertRaises(GameError) as e:
+            r.spin(a.id, 1)
+        self.assertEqual(e.exception.status, 409)
+
+    def test_no_spin_in_vote_finale(self):
+        r, (a, b) = tournament_room(2)
+        with self.assertRaises(GameError) as e:
+            r.spin(a.id, 1)
+        self.assertEqual(e.exception.status, 409)
+
+
+class Mood(unittest.TestCase):
+    def test_word_replaces_genres_and_back(self):
+        r, (a, b) = room_with(2)
+        r.set_genres(a.id, [16], 0)
+        r.set_mood(a.id, "heist", [10051, 191845], 0)
+        self.assertEqual((a.genres, a.word, a.keywords), ([], "heist", [10051, 191845]))
+        self.assertEqual(r.state_for(a.id, 0)["me"]["word"], "heist")
+        r.set_genres(a.id, [35], 0)
+        self.assertEqual((a.genres, a.word, a.keywords), ([35], "", []))
+
+    def test_word_without_movies_rejected(self):
+        r, (a, b) = room_with(2)
+        with self.assertRaises(GameError) as e:
+            r.set_mood(a.id, "dragoste", [], 0)
+        self.assertEqual(e.exception.status, 400)
+
+    def test_word_only_before_tournament(self):
+        r, (a, b) = tournament_room(2)
+        with self.assertRaises(GameError) as e:
+            r.set_mood(a.id, "heist", [1], 1)
+        self.assertEqual(e.exception.status, 409)
+
+    def test_keywords_union_of_active_players(self):
+        r, (a, b) = room_with(2)
+        r.set_mood(a.id, "heist", [3, 1], 0)
+        r.set_mood(b.id, "space", [2, 1], 0)
+        self.assertEqual(r.keywords(1), [1, 2, 3])
+        self.assertEqual(r.keywords(AWAY + 1), [])
+
+
 if __name__ == "__main__":
     unittest.main()

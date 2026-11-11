@@ -24,7 +24,7 @@ class FakeTmdb:
     def genres(self):
         return [{"id": 16, "name": "Animation"}, {"id": 35, "name": "Comedy"}]
 
-    def discover(self, genre_ids, page, companies=None):
+    def discover(self, genre_ids, page, companies=None, keywords=None):
         if self.fail:
             raise OSError("tmdb down")
         if companies or page > 2:
@@ -35,6 +35,9 @@ class FakeTmdb:
     def details(self, m):
         m.runtime, m.provider = 90, "Netflix"
         return m
+
+    def keywords(self, word):
+        return [10051] if word == "heist" else []
 
 
 def mem(test, cls=Stats):
@@ -352,6 +355,30 @@ class Api(ApiBase):
     def test_non_member_gets_404_like_unknown_room(self):
         code, a = self.create()
         self.assertEqual(self.state(code, "nobody")[0], 404)
+
+    def test_mood_word(self):
+        code, a = self.create()
+        self.assertEqual(self.act(code, a, type="mood", word="  heist ")[0], 200)
+        self.assertEqual(self.state(code, a)[1]["me"]["word"], "heist")
+        s, d = self.act(code, a, type="mood", word="dragoste")
+        self.assertEqual((s, d["error"]), (400, "No movies for that word, try another"))
+        self.assertEqual(self.act(code, a, type="mood", word=["x"])[0], 400)
+        self.assertEqual(self.act(code, "stranger", type="mood", word="heist")[0], 404)
+        self.assertEqual(self.call("POST", "/api/rooms", {"name": "Cy", "type": "mood", "word": "heist"}, ip="8.8.8.8")[0], 200)
+
+    def test_spin_finale_over_api(self):
+        code, a = self.create()
+        self.assertEqual(self.act(code, a, type="finale", mode="spin")[0], 200)
+        self.act(code, a, type="start")
+        self.act(code, a, type="force_start")
+        for _ in range(2):
+            d = self.wait_state(code, a, lambda d: d["cards"])
+            self.act(code, a, type="swipe", index=d["cards"][0]["index"], yes=True)
+        self.act(code, a, type="start_tournament")
+        self.assertEqual(self.state(code, a)[1]["phase"], "spin")
+        self.assertEqual(self.act(code, a, type="spin")[0], 200)
+        d = self.state(code, a)[1]
+        self.assertEqual((d["phase"], d["spins"]), ("winner", 1))
 
 
 class BrokenStats(Stats):

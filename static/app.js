@@ -5,7 +5,9 @@ const $toast = document.getElementById("toast");
 const POLL_MS = 1000;
 let session = load("mp");
 let state = null, lastKey = "", timer = null, seenMatch = null, genreList = null;
-let picked = null, lateGenresSent = false, busy = false, dragging = false, lastScreen = "";
+let picked = null, lateGenresSent = false, busy = false, dragging = false, animating = false, lastScreen = "";
+let moodMode = null, typedWord = null;
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function load(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
 function store(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} }
@@ -59,27 +61,34 @@ async function poll() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 
 async function act(type, extra = {}) {
+  let ok = true;
   try {
     await api("POST", `/api/rooms/${session.code}/action`, { type, ...extra });
   } catch (e) {
-    if (e.status === 404) { setSession(null); return closedScreen(); }
+    if (e.status === 404) { setSession(null); closedScreen(); return false; }
     toast(e.message, true);
+    ok = false;
   }
   poll();
+  return ok;
 }
 
 function onState() {
   const s = state;
   if (s.last_match) {
-    if (seenMatch !== null && s.last_match.seq > seenMatch && !s.solo) toast(`It's a match: ${s.last_match.title} (${s.last_match.yes} of ${s.last_match.of} said yes)`);
+    if (seenMatch !== null && s.last_match.seq > seenMatch) {
+      if (!s.solo) toast(`It's a match: ${s.last_match.title} (${s.last_match.yes} of ${s.last_match.of} said yes)`);
+      const bar = $app.querySelector(".shortlist");
+      if (bar) burst(...centerOf(bar), 50);
+    }
     seenMatch = s.last_match.seq;
   } else if (seenMatch === null) seenMatch = 0;
   const key = JSON.stringify(s) + "|" + lateGenresSent;
-  if (key === lastKey || dragging) return;
-  lastKey = key;
   const screen = s.phase + "|" + (s.match ?? "");
+  if (key === lastKey || dragging || animating || (screen === lastScreen && document.activeElement?.id === "word")) return;
+  lastKey = key;
   if (screen !== lastScreen) { lastScreen = screen; fadeIn(); }
-  ({ lobby: lobbyScreen, genres: genresScreen, swiping: swipeScreen, tournament: tournamentScreen, winner: winnerScreen })[s.phase]?.(s);
+  ({ lobby: lobbyScreen, genres: genresScreen, swiping: swipeScreen, tournament: tournamentScreen, spin: spinScreen, winner: winnerScreen })[s.phase]?.(s);
 }
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -131,7 +140,7 @@ async function enter(promise) {
     const d = await promise();
     setSession({ code: d.code, pid: d.pid });
     history.replaceState(null, "", "/r/" + d.code);
-    lastKey = ""; seenMatch = null; picked = null; lateGenresSent = false;
+    lastKey = ""; seenMatch = null; picked = null; lateGenresSent = false; moodMode = null; typedWord = null;
     poll();
   } catch (e) { toast(e.message, true); }
   busy = false;
@@ -192,7 +201,6 @@ function marquee(lines, small, tag = "h1", label = "Moviepicker") {
 
 async function homeScreen() {
   history.replaceState(null, "", "/");
-  document.querySelectorAll(".confetti").forEach((c) => c.remove());
   const draw = (stats) => show(
     h("div", { class: "hero" + (stats && stats.top.length ? " compact" : "") },
       marquee(stats && stats.top.length ? ["MOVIEPICKER"] : ["MOVIE", "PICKER"], stats && stats.top.length),
@@ -297,6 +305,7 @@ function lobbyScreen(s) {
     h("button", { class: "alt", onclick: () => shareInvite(s.code) }, "Share invite link"),
     playerChips(s),
     h("p", { class: "muted small" }, `${s.players.length} / ${s.max_players}`),
+    finaleToggle(s),
     h("div", { class: "bottom" },
       s.host ? h("button", { onclick: () => act("start") }, "Start") : h("p", { class: "muted" }, "Waiting for the host to start…"),
       leave()));
@@ -319,34 +328,64 @@ function genreChips(onChange) {
   return box;
 }
 
+function finaleToggle(s) {
+  const label = { vote: "Vote", spin: "Spin the wheel" };
+  if (!s.host) return h("p", { class: "muted" }, "Final pick: " + label[s.finale].toLowerCase());
+  return h("div", { class: "finale", role: "group", "aria-label": "Final pick" }, "Final pick:", Object.entries(label).map(([k, l]) =>
+    h("button", { class: "chip" + (s.finale === k ? " on" : ""), "aria-pressed": String(s.finale === k),
+      onclick: () => act("finale", { mode: k }) }, l)));
+}
+
+const MOODS = ["heist", "space", "zombie", "time travel", "superhero", "christmas", "road trip", "ghost"];
+function moodPicker(s) {
+  if (moodMode === null) moodMode = s.me.word ? "word" : "genres";
+  if (typedWord === null) typedWord = s.me.word;
+  const redraw = () => { lastKey = ""; onState(); };
+  const tab = (k, l) => h("button", { class: "chip" + (moodMode === k ? " on" : ""), "aria-pressed": String(moodMode === k),
+    onclick: () => { moodMode = k; redraw(); } }, l);
+  const word = h("input", { id: "word", maxlength: 20, autocomplete: "off", enterkeyhint: "go", placeholder: "e.g. heist",
+    "aria-label": "One word", value: typedWord, oninput: (e) => { typedWord = e.target.value; } });
+  return [
+    h("div", { class: "chips" }, tab("genres", "Genres"), tab("word", "One word")),
+    moodMode === "genres" ? genreChips() : h("div", { class: "stack" }, word,
+      h("div", { class: "chips" }, MOODS.map((w) => h("button", { class: "chip" + (typedWord.trim().toLowerCase() === w ? " on" : ""),
+        onclick: () => { typedWord = w; redraw(); } }, w))))];
+}
+
+function sendMood() {
+  const w = moodMode === "word" ? typedWord.trim() : "";
+  return w ? act("mood", { word: w }) : act("genres", { ids: moodMode === "word" ? [] : [...picked] });
+}
+
 function genresScreen(s) {
   if (!picked) picked = new Set(s.me.genres);
   const here = s.players.filter((p) => !p.away);
   const ready = here.filter((p) => p.ready).length;
+  const picker = moodPicker(s);
   show(
     h("h2", {}, "What are you in the mood for?"),
-    h("p", { class: "muted" }, "Pick as many as you like."),
-    genreChips(),
-    s.solo ? null : h("section", { class: "people" },
+    h("p", { class: "muted" }, moodMode === "word" ? "Type a theme, a place, anything. Or tap one." : "Pick as many as you like."),
+    picker,
+    s.solo ? finaleToggle(s) : h("section", { class: "people" },
       h("h3", {}, "In this room"),
       playerChips(s)),
     h("div", { class: "bottom" },
       s.solo ? null : h("p", { class: "muted small" }, `${ready} of ${here.length} ready`),
       s.me.ready
         ? h("button", { disabled: true }, "Waiting for the others")
-        : h("button", { onclick: async () => { await act("genres", { ids: [...picked] }); act("ready"); } }, s.solo ? "Start picking" : "I'm ready"),
+        : h("button", { onclick: async () => { if (await sendMood()) act("ready"); } }, s.solo ? "Start picking" : "I'm ready"),
       s.solo ? h("button", { class: "ghost", onclick: () => act("close") }, "Cancel")
         : s.host && here.length > 1 ? h("button", { class: "alt", onclick: () => act("force_start") }, "Start without waiting") : null));
 }
 
-function lateGenresScreen() {
+function lateGenresScreen(s) {
   if (!picked) picked = new Set();
   show(
     h("h2", {}, "What are you in the mood for?"),
     h("p", { class: "muted" }, "Pick what you're in the mood for, then start picking."),
-    genreChips(),
+    moodPicker(s),
     h("div", { class: "bottom" },
-      h("button", { onclick: async () => { lateGenresSent = true; await act("genres", { ids: [...picked] }); } }, "Start picking")));
+      h("button", { onclick: async () => { lateGenresSent = true; if (!(await sendMood())) lateGenresSent = false; } }, "Start picking")));
 }
 
 function matchesBar(s) {
@@ -357,7 +396,7 @@ function matchesBar(s) {
   }
   return h("div", { class: "matches" },
     h("div", { class: "shortlist" }, `Matches ${Math.min(s.shortlist.length, 4)}/4`, slots),
-    h("p", { class: "muted small" }, "At 4 matches you vote head-to-head."));
+    h("p", { class: "muted small" }, s.finale === "spin" ? "At 4 matches you spin the wheel." : "At 4 matches you vote head-to-head."));
 }
 
 let lastCard = null, keyVote = null;
@@ -367,13 +406,13 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowLeft") keyVote(false);
 });
 function swipeScreen(s) {
-  if (!s.me.ready && !lateGenresSent && !s.me.genres.length) return lateGenresScreen();
+  if (!s.me.ready && !lateGenresSent && !s.me.genres.length && !s.me.word) return lateGenresScreen(s);
   const notice = s.notice ? h("p", { class: "notice" }, s.notice) : null;
   const hostVote = s.host && s.shortlist.length
     ? h("button", { class: "ghost vote-now", onclick: () => {
-        const n = s.shortlist.length;
-        if (confirm(`Start the vote with ${n} match${n > 1 ? "es" : ""}?`)) act("start_tournament");
-      } }, `Vote now (${s.shortlist.length})`) : null;
+        const n = s.shortlist.length, what = s.finale === "spin" ? "Spin the wheel" : "Start the vote";
+        if (confirm(`${what} with ${n} match${n > 1 ? "es" : ""}?`)) act("start_tournament");
+      } }, `${s.finale === "spin" ? "Spin" : "Vote"} now (${s.shortlist.length})`) : null;
   const topbar = h("div", { class: "topbar" },
     s.solo ? h("span", { class: "ticket code-chip" }, h("span", { class: "label" }, "JUST ME"))
       : h("span", { class: "ticket code-chip", "aria-label": "Room code " + s.code.split("").join(" ") }, h("span", { class: "label" }, "ROOM"), s.code),
@@ -395,12 +434,15 @@ function swipeScreen(s) {
     h("div", { class: "body" },
       h("div", { class: "title" }, titleYear(m)),
       h("div", { class: "meta" }, stars(m), runtime(m.runtime), provider(m)),
-      h("p", { class: "overview" }, m.overview)));
+      h("p", { class: "overview" }, m.overview)),
+    h("b", { class: "stamp yes", "aria-hidden": "true" }, "YES"),
+    h("b", { class: "stamp no", "aria-hidden": "true" }, "NOPE"));
   const vote = (yes) => {
     if (busy) return;
     busy = true;
     const dir = yes ? 1 : -1;
-    card.classList.remove("in");
+    card.dataset.lean = yes ? "yes" : "no";
+    card.style.animation = "none";
     card.style.transition = "transform .28s ease-in, opacity .28s ease-in";
     card.style.transform = `translateX(${dir * 130}%) rotate(${dir * 16}deg)`;
     card.style.opacity = "0";
@@ -416,16 +458,17 @@ function swipeScreen(s) {
 }
 
 function dragGesture(card, vote, movie) {
-  let x0 = null, dx = 0;
+  let x0 = null, dx = 0, far = 0;
   card.addEventListener("pointerdown", (e) => {
-    x0 = e.clientX; dx = 0; dragging = true;
-    card.classList.remove("in");
+    x0 = e.clientX; dx = far = 0; dragging = true;
+    card.style.animation = "none";
     card.style.transition = "none";
     card.setPointerCapture(e.pointerId);
   });
   card.addEventListener("pointermove", (e) => {
     if (x0 === null) return;
     dx = e.clientX - x0;
+    far = Math.max(far, Math.abs(dx));
     card.style.transform = `translateX(${dx}px) rotate(${dx / 18}deg)`;
     card.dataset.lean = dx > 40 ? "yes" : dx < -40 ? "no" : "";
   });
@@ -434,7 +477,7 @@ function dragGesture(card, vote, movie) {
     x0 = null; dragging = false;
     card.dataset.lean = "";
     if (Math.abs(dx) > 90) return vote(dx > 0);
-    if (Math.abs(dx) < 6) openSheet(movie);
+    if (far < 6) openSheet(movie);
     card.style.transition = "transform .2s ease-out";
     card.style.transform = "";
   };
@@ -458,41 +501,122 @@ function tournamentScreen(s) {
     h("h2", {}, s.round_name),
     h("p", { class: "muted" }, "Tap the one you'd rather watch."),
     h("div", { class: "pair" }, pick(s.pair[0]), h("div", { class: "vs" }, "VS"), pick(s.pair[1])),
-    h("p", { class: "muted" }, `${s.voted}/${s.of} voted`),
-    h("div", { class: "bracket" }, s.bracket.filter((b) => b.winner).map((b) =>
-      h("div", { class: "row" }, b.round + ": ", h("span", { class: "w" }, b.winner), ` beat ${b.winner === b.a ? b.b : b.a}`))));
+    h("p", { class: "muted" }, `${s.voted}/${s.of} voted`));
 }
 
-function confetti() {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const colors = ["#ffc93c", "#fff6d8", "#e8263a", "#ff9f1c", "#ffe08a"];
-  const box = h("div", { class: "confetti", "aria-hidden": "true" });
-  for (let i = 0; i < 60; i++) {
-    const p = h("i");
-    p.style.left = Math.random() * 100 + "%";
-    p.style.background = colors[i % colors.length];
-    p.style.animationDelay = Math.random() * 0.6 + "s";
-    p.style.animationDuration = 1.8 + Math.random() * 1.4 + "s";
-    p.style.setProperty("--drift", (Math.random() * 160 - 80) + "px");
-    box.append(p);
+let fx = null, parts = [];
+const centerOf = (el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+function burst(x, y, n) {
+  if (calm()) return;
+  if (!fx) { fx = h("canvas", { class: "fx", "aria-hidden": "true" }); document.body.append(fx); }
+  const d = devicePixelRatio, colors = ["#ffc93c", "#fff6d8", "#ff7a6b", "#ff9f1c", "#ffe08a"];
+  if (!parts.length) { fx.width = innerWidth * d; fx.height = innerHeight * d; requestAnimationFrame(fxTick); }
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = 4 + Math.random() * 9, pop = Math.random() < .35;
+    parts.push({ x: x * d, y: y * d, vx: Math.cos(a) * v * d, vy: (Math.sin(a) * v - 6) * d, r: (pop ? 6 + Math.random() * 4 : 3 + Math.random() * 3) * d,
+      c: pop ? "#fff6d8" : colors[i % colors.length], pop, spin: Math.random() * 6, life: 1 });
   }
-  document.body.append(box);
-  setTimeout(() => box.remove(), 4000);
+}
+function fxTick() {
+  const g = fx.getContext("2d"), d = devicePixelRatio;
+  g.clearRect(0, 0, fx.width, fx.height);
+  parts = parts.filter((p) => p.life > 0 && p.y < fx.height + 40);
+  for (const p of parts) {
+    p.vy += .35 * d; p.vx *= .985; p.x += p.vx; p.y += p.vy; p.life -= .008; p.spin += .2;
+    g.globalAlpha = Math.max(0, p.life);
+    g.fillStyle = p.c;
+    if (p.pop) {
+      for (let k = 0; k < 4; k++) { g.beginPath(); g.arc(p.x + Math.cos(k * 1.6) * p.r * .6, p.y + Math.sin(k * 1.6) * p.r * .6, p.r * .6, 0, 7); g.fill(); }
+    } else {
+      g.save(); g.translate(p.x, p.y); g.rotate(p.spin); g.fillRect(-p.r, -p.r / 2, p.r * 2, p.r); g.restore();
+    }
+  }
+  g.globalAlpha = 1;
+  if (parts.length) requestAnimationFrame(fxTick);
 }
 
-let celebrated = null;
-function winnerScreen(s) {
-  const m = s.winner;
-  if (celebrated !== s.code) { celebrated = s.code; confetti(); }
-  show(h("div", { class: "stack winner pop" },
-      marquee(["NOW", "SHOWING"], true, "p", "Now showing"),
-      h("h1", {}, titleYear(m)),
-      m.poster ? h("img", { src: m.poster, alt: "" }) : null,
-      h("div", { class: "meta center" }, stars(m), runtime(m.runtime), provider(m)),
-      watchLink(m)),
+const SLICES = ["#ffc93c", "#5a1222", "#ff7a6b", "#3d0b16"];
+function drawWheel(cv, list, angle) {
+  const g = cv.getContext("2d"), c = 300, slice = Math.PI * 2 / list.length;
+  cv.angle = angle;
+  g.clearRect(0, 0, 600, 600);
+  list.forEach((m, i) => {
+    g.beginPath(); g.moveTo(c, c); g.arc(c, c, 284, angle + i * slice, angle + (i + 1) * slice); g.closePath();
+    g.fillStyle = SLICES[i % 4]; g.fill();
+    g.save(); g.translate(c, c); g.rotate(angle + (i + .5) * slice);
+    g.textAlign = "right"; g.textBaseline = "middle";
+    g.fillStyle = i % 2 ? "#fff1c2" : "#2a0710"; g.font = "700 26px Rubik, system-ui, sans-serif";
+    g.fillText(m.title.length > 18 ? m.title.slice(0, 17) + "…" : m.title, 262, 0);
+    g.restore();
+  });
+  g.beginPath(); g.arc(c, c, 290, 0, 7); g.lineWidth = 10; g.strokeStyle = "#ffc93c"; g.stroke();
+  for (let i = 0; i < 24; i++) { g.beginPath(); g.arc(c + Math.cos(i * Math.PI / 12) * 290, c + Math.sin(i * Math.PI / 12) * 290, 6, 0, 7); g.fillStyle = "#fff6d8"; g.fill(); }
+  g.beginPath(); g.arc(c, c, 36, 0, 7); g.fillStyle = "#1a050a"; g.fill(); g.lineWidth = 4; g.stroke();
+}
+function wheelBox(list) {
+  const cv = h("canvas", { width: 600, height: 600, role: "img", "aria-label": "Wheel: " + list.map((m) => m.title).join(", ") });
+  drawWheel(cv, list, 0);
+  document.fonts?.ready.then(() => drawWheel(cv, list, cv.angle));
+  return h("div", { class: "wheel" }, cv, h("span", { class: "pointer", "aria-hidden": "true" }));
+}
+function spinWheel(cv, list, idx, cover, done) {
+  const slice = Math.PI * 2 / list.length, a0 = cv.angle, turn = Math.PI * 2;
+  const land = -Math.PI / 2 - (idx + .5) * slice + (Math.random() - .5) * slice * .6;
+  const total = turn * 6 + (((land - a0) % turn) + turn) % turn, t0 = performance.now(), dur = 4600;
+  let covered = false;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur);
+    drawWheel(cv, list, a0 + total * (1 - Math.pow(1 - k, 4)));
+    if (k > .7 && !covered) { covered = true; cover(); }
+    if (k < 1) requestAnimationFrame(step); else setTimeout(done, 300);
+  };
+  requestAnimationFrame(step);
+}
+
+function spinScreen(s) {
+  const host = s.players.find((p) => p.host);
+  show(
+    h("h2", {}, "Spin the wheel"),
+    h("p", { class: "muted" }, "The wheel picks from your matches."),
+    h("div", { class: "stage wide" }, wheelBox(s.shortlist.slice(0, 4))),
     h("div", { class: "bottom" },
-      s.solo ? h("button", { onclick: () => act("close") }, "Back to start")
-        : [s.host ? h("button", { onclick: () => act("close") }, "Close room") : null, leave()]));
+      s.host ? h("button", { onclick: () => act("spin") }, "Spin")
+        : h("p", { class: "muted" }, `Waiting for ${host ? host.name : "the host"} to spin…`),
+      leave()));
+}
+
+let revealed = load("mp-seen");
+function winnerScreen(s) {
+  const m = s.winner, list = s.shortlist.slice(0, 4), key = s.code + ":" + s.spins;
+  const fresh = revealed !== key && !calm();
+  revealed = key;
+  store("mp-seen", key);
+  const wheel = fresh && s.finale === "spin" && s.spins > 0 && list.length > 1 ? wheelBox(list) : null;
+  const flip = h("div", { class: "flip" + (fresh ? "" : " open") + (wheel ? " hide" : "") },
+    h("div", { class: "flip-inner" },
+      h("div", { class: "flip-face flip-front", "aria-hidden": "true" }, h("span", {}, "TONIGHT'S", h("br"), "MOVIE")),
+      h("div", { class: "flip-face flip-back" }, m.poster ? h("img", { src: m.poster, alt: "" }) : h("span", {}, m.title))));
+  $app.classList.toggle("hush", fresh);
+  const again = s.host && s.finale === "spin" && list.length > 1
+    ? h("button", { class: "alt late", onclick: () => act("spin") }, "Spin again") : null;
+  show(h("div", { class: "stack winner" },
+      marquee(["NOW", "SHOWING"], true, "p", "Now showing"),
+      h("h1", { class: "late" }, titleYear(m)),
+      h("div", { class: "stage" }, wheel, flip),
+      h("div", { class: "meta center late" }, stars(m), runtime(m.runtime), provider(m)),
+      h("div", { class: "late" }, watchLink(m))),
+    h("div", { class: "bottom late" },
+      s.solo ? [again, h("button", { onclick: () => act("close") }, "Back to start")]
+        : [again, s.host ? h("button", { onclick: () => act("close") }, "Close room") : null, leave()]));
+  if (!fresh) return;
+  animating = true;
+  const open = () => {
+    flip.classList.remove("hide");
+    flip.classList.add("open");
+    setTimeout(() => { burst(...centerOf(flip), 160); $app.classList.remove("hush"); animating = false; poll(); }, 450);
+  };
+  if (!wheel) return setTimeout(open, 700);
+  spinWheel(wheel.firstChild, list, list.findIndex((x) => x.id === m.id), () => { flip.classList.remove("hide"); wheel.classList.add("gone"); }, open);
 }
 
 function closedScreen() {
