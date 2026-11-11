@@ -10,6 +10,7 @@ import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
 import server
 from stats import Stats
@@ -471,6 +472,47 @@ class AppTests(unittest.TestCase):
         app.janitor(1002)
         app.janitor(1002.5)
         self.assertEqual(ticks, [1002])
+
+
+class Refills(unittest.TestCase):
+    def setUp(self):
+        self.saved = server.MAX_REFILLS
+        server.MAX_REFILLS = 2
+        self.app = server.App(FakeTmdb(), mem(self))
+        self.rooms = []
+        for i in range(3):
+            pid = self.app.create("Ann", "1.1.1.%d" % i, 1000, solo=True)["pid"]
+            room = list(self.app.rooms.values())[-1]
+            room.force_start(pid, 1000)
+            self.rooms.append(room)
+
+    def tearDown(self):
+        server.MAX_REFILLS = self.saved
+
+    def refill(self, *rooms):
+        with mock.patch.object(server.threading, "Thread") as t:
+            for room in rooms:
+                self.app.maybe_refill(room, 1000)
+        return t
+
+    def test_one_refill_in_flight_per_room(self):
+        self.assertEqual(self.refill(self.rooms[0], self.rooms[0]).call_count, 1)
+
+    def test_refills_capped_across_rooms(self):
+        t = self.refill(*self.rooms)
+        self.assertEqual(t.call_count, 2)
+        kw = t.call_args_list[0].kwargs
+        kw["target"](*kw["args"])
+        self.assertEqual(len(self.rooms[0].deck), 20)
+        self.assertEqual(self.refill(self.rooms[2]).call_count, 1)
+
+    def test_failed_thread_start_frees_slot(self):
+        with mock.patch.object(server.threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            for room in self.rooms[:2]:
+                with self.assertRaises(RuntimeError):
+                    self.app.maybe_refill(room, 1000)
+        self.assertFalse(self.app.meta[self.rooms[0].code]["refilling"])
+        self.assertEqual(self.refill(*self.rooms).call_count, 2)
 
 
 class ApiTmdbDown(ApiBase):

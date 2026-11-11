@@ -6,11 +6,11 @@ from dataclasses import asdict, dataclass, field
 MAX_PLAYERS = 10
 MAX_ROOMS = 500
 IDLE_CLOSE = 600
-EMPTY_CLOSE = 300
 AWAY = 60
 SHORTLIST_SIZE = 4
 RELAX_AFTER = 25
 MAX_LEAD = 15
+MAX_DECK = 300
 NAME_MAX = 20
 MAX_GENRES = 32
 
@@ -162,8 +162,7 @@ class Room:
     def tick(self, now: float) -> None:
         if self.phase == "closed":
             return
-        lone = len(self.players) == 1 and all(now - p.last_seen >= EMPTY_CLOSE for p in self.players.values())
-        if lone or now - self.last_action >= IDLE_CLOSE:
+        if now - self.last_action >= IDLE_CLOSE:
             self.phase = "closed"
             return
         self._progress(now)
@@ -209,7 +208,7 @@ class Room:
     def add_cards(self, movies: list[Movie]) -> None:
         have = {m.id for m in self.deck}
         for m in movies:
-            if m.id not in have:
+            if m.id not in have and len(self.deck) < MAX_DECK:
                 self.deck.append(m)
                 have.add(m.id)
 
@@ -217,7 +216,7 @@ class Room:
         return max(p.cursor, self.resolved)
 
     def needs_cards(self, now: float) -> bool:
-        if self.phase != "swiping":
+        if self.phase != "swiping" or len(self.deck) >= MAX_DECK:
             return False
         cursors = [self._cursor(p) for p in self.active(now)] or [self.resolved]
         return max(cursors) + 10 >= len(self.deck)
@@ -254,6 +253,11 @@ class Room:
                 if self.no_match_streak >= RELAX_AFTER and not self.relaxed:
                     self.relaxed = True
                     self.notice = "Loosening up: majority now counts"
+        if self.phase == "swiping" and self.resolved >= MAX_DECK:
+            if self.shortlist:
+                self._begin_tournament(now)
+            else:
+                self.phase = "closed"
 
     def start_tournament(self, pid: str, now: float) -> None:
         self._act(pid, now)
@@ -383,7 +387,7 @@ class Room:
         if self.phase != "swiping":
             return {"cards": [], "ahead": False, "loading": False}
         c = self._cursor(me)
-        ahead = c >= self.resolved + MAX_LEAD
+        ahead = c >= self.resolved + MAX_LEAD or c >= MAX_DECK
         loading = not ahead and c >= len(self.deck)
         cards = [] if ahead or loading else [dict(m.public(), index=i) for i, m in enumerate(self.deck[c:c + 5], start=c)]
         return {"cards": cards, "ahead": ahead, "loading": loading}

@@ -26,6 +26,7 @@ CODE_LEN = 6
 BODY_MAX = 2048
 MAX_CONNECTIONS = 64
 REQUEST_DEADLINE = 20
+MAX_REFILLS = 4
 CREATE_LIMIT, CREATE_WINDOW = 5, 600
 OPEN_PER_CLIENT, OPEN_PER_48 = 2, 10
 MISS_LIMIT, MISS_LIMIT_48, MISS_WINDOW = 20, 100, 600
@@ -49,6 +50,7 @@ class App:
         self.last_pick: dict[str, float] = {}
         self.lock = threading.Lock()
         self.swept = float("-inf")
+        self.refills = threading.BoundedSemaphore(MAX_REFILLS)
         self.counts = dict.fromkeys(("visits", "rooms_group", "rooms_solo", "players", "games", "swipes_yes", "swipes_no"), 0)
         self.counts_lock = threading.Lock()
 
@@ -184,11 +186,17 @@ class App:
 
     def maybe_refill(self, room: Room, now: float) -> None:
         meta = self.meta.get(room.code)
-        if meta and not meta["refilling"] and meta["page"] <= MAX_PAGE and room.needs_cards(now):
+        if meta and not meta["refilling"] and meta["page"] <= MAX_PAGE and room.needs_cards(now) and \
+                self.refills.acquire(blocking=False):
             meta["refilling"] = True
             weights = room.genre_weights(now)
             exclude = {m.id for m in room.deck}
-            threading.Thread(target=self._refill, args=(room, meta, weights, exclude), daemon=True).start()
+            try:
+                threading.Thread(target=self._refill, args=(room, meta, weights, exclude), daemon=True).start()
+            except BaseException:
+                meta["refilling"] = False
+                self.refills.release()
+                raise
 
     def _refill(self, room: Room, meta: dict, weights: dict, exclude: set) -> None:
         try:
@@ -209,6 +217,7 @@ class App:
                     room.notice = REFILL_NOTICE
         finally:
             meta["refilling"] = False
+            self.refills.release()
 
 
 def _int(v) -> int:

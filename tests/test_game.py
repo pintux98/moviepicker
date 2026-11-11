@@ -1,6 +1,6 @@
 import unittest
 
-from game import AWAY, EMPTY_CLOSE, IDLE_CLOSE, MAX_LEAD, MAX_PLAYERS, RELAX_AFTER, GameError, Movie, Room, threshold
+from game import AWAY, IDLE_CLOSE, MAX_DECK, MAX_LEAD, MAX_PLAYERS, RELAX_AFTER, GameError, Movie, Room, threshold
 
 
 def room_with(n, now=0.0):
@@ -111,20 +111,6 @@ class Basics(unittest.TestCase):
             r.add_player("late", 2 * IDLE_CLOSE)
         self.assertEqual(e.exception.status, 404)
 
-    def test_lone_member_away_closes_room(self):
-        r, (a,) = room_with(1)
-        r.tick(EMPTY_CLOSE - 1)
-        self.assertEqual(r.phase, "lobby")
-        r.tick(EMPTY_CLOSE)
-        self.assertEqual(r.phase, "closed")
-        r, (a,) = room_with(1)
-        r.seen(a.id, EMPTY_CLOSE - 1)
-        r.tick(EMPTY_CLOSE)
-        self.assertEqual(r.phase, "lobby")
-        r, ps = room_with(2)
-        r.tick(EMPTY_CLOSE)
-        self.assertEqual(r.phase, "lobby")
-
     def test_nickname_control_chars_stripped(self):
         r = Room("ABCD", 0)
         self.assertEqual(r.add_player("a\u202eb\x00\nc", 0).name, "abc")
@@ -232,6 +218,30 @@ class Swiping(unittest.TestCase):
         self.assertEqual(len(r.shortlist), 1)
         vote_all(r, ps, 2)
         self.assertEqual(len(r.shortlist), 1)
+
+    def test_deck_capped(self):
+        self.assertEqual(MAX_DECK, 300)
+        r, (a,) = swiping_room(1, cards=MAX_DECK - 5)
+        r.add_cards(movies(20, start=MAX_DECK))
+        self.assertEqual(len(r.deck), MAX_DECK)
+        self.assertFalse(r.needs_cards(1))
+
+    def test_end_of_capped_deck_starts_vote(self):
+        r, (a, b) = swiping_room(2, cards=MAX_DECK)
+        vote_all(r, (a, b), 2)
+        for _ in range(MAX_DECK - 2):
+            vote_all(r, (a, b), 0)
+        self.assertEqual(r.phase, "swiping")
+        r.swipe(a.id, MAX_DECK - 1, False, 1)
+        self.assertEqual((r.state_for(a.id, 1)["ahead"], r.state_for(a.id, 1)["loading"]), (True, False))
+        r.swipe(b.id, MAX_DECK - 1, False, 1)
+        self.assertEqual(r.phase, "winner")
+
+    def test_end_of_capped_deck_without_match_closes(self):
+        r, (a,) = swiping_room(1, cards=MAX_DECK)
+        for i in range(MAX_DECK):
+            r.swipe(a.id, i, False, 1)
+        self.assertEqual(r.phase, "closed")
 
     def test_away_player_does_not_block(self):
         r, ps = swiping_room(3)
