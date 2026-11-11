@@ -139,7 +139,6 @@ main:has(> .card) { gap: 10px; }
 .stats-home { display: flex; flex-direction: column; gap: 8px; }
 .stats-home h3 { margin: 6px 0 0; font-size: 15px; color: var(--text); font-weight: 700; }
 .rank-row.hidden { display: none; }
-@media (max-height: 600px) { .strip { grid-template-columns: repeat(5, minmax(0, 52px)); } }
 .rank-list { display: flex; flex-direction: column; gap: 6px; }
 .rank-row { display: grid; grid-template-columns: 22px 34px 1fr; gap: 10px; align-items: center; text-align: left; min-height: 0;
   padding: 5px 10px 5px 6px; background: rgb(255 241 194 / .05); border: 1px solid var(--line); border-radius: 12px; color: var(--text); font-weight: 500; box-shadow: none; }
@@ -151,6 +150,16 @@ main:has(> .card) { gap: 10px; }
 .strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .strip-item { padding: 0; min-height: 0; background: none; border-radius: 10px; min-width: 0; box-shadow: none; }
 .strip-poster { width: 100%; aspect-ratio: 2 / 3; border-radius: 10px; object-fit: cover; display: block; background: #2a2a33; }
+@media (max-height: 760px) {
+  main:has(> .stats-home) { gap: 10px; }
+  .rank-row { grid-template-columns: 22px 28px 1fr; padding: 3px 10px 3px 6px; }
+  .mini-poster { width: 28px; }
+  .stack.tight strong { font-size: 14px; }
+  .strip { grid-template-columns: repeat(5, minmax(0, 58px)); justify-content: center; }
+  .home-actions { padding-top: 8px; }
+  .attrib { padding-top: 6px; }
+}
+@media (max-height: 600px) { .strip { grid-template-columns: repeat(5, minmax(0, 52px)); } }
 
 .backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / .55); z-index: 20; display: flex; align-items: flex-end; justify-content: center;
   animation: fade-in .2s ease-out; }
