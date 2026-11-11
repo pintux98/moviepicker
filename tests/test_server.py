@@ -115,6 +115,10 @@ class Api(ApiBase):
         try:
             self.call("GET", "/")
             self.call("HEAD", "/")
+            c0 = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c0.request("GET", "/")
+            c0.getresponse().read()
+            c0.close()
             self.call("POST", "/api/rooms", {"name": "Me", "solo": True}, ip="2.2.2.1")
             code, a = self.create(ip="2.2.2.2")
             self.call("POST", "/api/rooms/%s/join" % code, {"name": "Bob"})

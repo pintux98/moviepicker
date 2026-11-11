@@ -312,7 +312,7 @@ class Handler(BaseHTTPRequestHandler):
         parts = urllib.parse.urlsplit(self.path)
         path = urllib.parse.unquote(parts.path)
         if path == "/" or re.fullmatch(r"/r/[A-Za-z2-9]{6}", path):
-            if self.command == "GET":
+            if self.command == "GET" and self.headers.get("CF-Connecting-IP"):
                 self.app.count("visits")
             return self._send(200, index_page(), TYPES[".html"], {"Cache-Control": "no-store"})
         if path.startswith("/static/"):
