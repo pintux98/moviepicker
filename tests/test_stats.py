@@ -13,6 +13,7 @@ def movie(i, rating=7.0):
 class StatsStore(unittest.TestCase):
     def setUp(self):
         self.s = Stats(":memory:")
+        self.addCleanup(self.s.close)
 
     def test_empty(self):
         self.assertEqual((self.s.top(), self.s.recent()), ([], []))

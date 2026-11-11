@@ -1,6 +1,6 @@
 import unittest
 
-from game import AWAY, IDLE_CLOSE, MAX_LEAD, MAX_PLAYERS, RELAX_AFTER, GameError, Movie, Room, threshold
+from game import AWAY, EMPTY_CLOSE, IDLE_CLOSE, MAX_LEAD, MAX_PLAYERS, RELAX_AFTER, GameError, Movie, Room, threshold
 
 
 def room_with(n, now=0.0):
@@ -111,12 +111,34 @@ class Basics(unittest.TestCase):
             r.add_player("late", 2 * IDLE_CLOSE)
         self.assertEqual(e.exception.status, 404)
 
+    def test_lone_member_away_closes_room(self):
+        r, (a,) = room_with(1)
+        r.tick(EMPTY_CLOSE - 1)
+        self.assertEqual(r.phase, "lobby")
+        r.tick(EMPTY_CLOSE)
+        self.assertEqual(r.phase, "closed")
+        r, (a,) = room_with(1)
+        r.seen(a.id, EMPTY_CLOSE - 1)
+        r.tick(EMPTY_CLOSE)
+        self.assertEqual(r.phase, "lobby")
+        r, ps = room_with(2)
+        r.tick(EMPTY_CLOSE)
+        self.assertEqual(r.phase, "lobby")
+
     def test_nickname_control_chars_stripped(self):
         r = Room("ABCD", 0)
         self.assertEqual(r.add_player("a\u202eb\x00\nc", 0).name, "abc")
         with self.assertRaises(GameError) as e:
             r.add_player("\u202e\x00", 0)
         self.assertEqual(e.exception.status, 400)
+
+    def test_look_alike_names_taken(self):
+        for first, second in (("x" * 19, "x" * 19 + " y"), ("ana", "ＡＮＡ"), ("a b", "a  b")):
+            r = Room("ABCD", 0)
+            r.add_player(first, 0)
+            with self.assertRaises(GameError) as e:
+                r.add_player(second, 0)
+            self.assertEqual(e.exception.status, 409, second)
 
     def test_duplicate_name_rejected(self):
         r = Room("ABCD", 0)

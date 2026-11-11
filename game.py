@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 MAX_PLAYERS = 10
 MAX_ROOMS = 500
 IDLE_CLOSE = 600
+EMPTY_CLOSE = 300
 AWAY = 60
 SHORTLIST_SIZE = 4
 RELAX_AFTER = 25
@@ -52,7 +53,8 @@ class GameError(Exception):
 def clean_name(name) -> str:
     if not isinstance(name, str):
         return ""
-    return "".join(c for c in name if not unicodedata.category(c).startswith("C")).strip()[:NAME_MAX]
+    kept = "".join(c for c in name if not unicodedata.category(c).startswith("C"))
+    return " ".join(unicodedata.normalize("NFKC", kept).split())[:NAME_MAX].rstrip()
 
 
 def threshold(n: int, relaxed: bool) -> int:
@@ -160,7 +162,8 @@ class Room:
     def tick(self, now: float) -> None:
         if self.phase == "closed":
             return
-        if now - self.last_action >= IDLE_CLOSE:
+        lone = len(self.players) == 1 and all(now - p.last_seen >= EMPTY_CLOSE for p in self.players.values())
+        if lone or now - self.last_action >= IDLE_CLOSE:
             self.phase = "closed"
             return
         self._progress(now)

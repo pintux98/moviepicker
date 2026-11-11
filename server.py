@@ -6,6 +6,7 @@ import os
 import random
 import re
 import secrets
+import socket
 import sqlite3
 import sys
 import threading
@@ -23,9 +24,11 @@ STATIC = Path(__file__).resolve().parent / "static"
 CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789"
 CODE_LEN = 6
 BODY_MAX = 2048
+MAX_CONNECTIONS = 64
+REQUEST_DEADLINE = 20
 CREATE_LIMIT, CREATE_WINDOW = 5, 600
-OPEN_PER_CLIENT = 2
-MISS_LIMIT, MISS_WINDOW = 20, 600
+OPEN_PER_CLIENT, OPEN_PER_48 = 2, 10
+MISS_LIMIT, MISS_LIMIT_48, MISS_WINDOW = 20, 100, 600
 PICK_WINDOW = 86400
 REFILL_NOTICE = "Couldn't load more movies, retrying…"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -45,6 +48,7 @@ class App:
         self.pending: list[tuple] = []
         self.last_pick: dict[str, float] = {}
         self.lock = threading.Lock()
+        self.swept = float("-inf")
         self.counts = dict.fromkeys(("visits", "rooms_group", "rooms_solo", "players", "games", "swipes_yes", "swipes_no"), 0)
         self.counts_lock = threading.Lock()
 
@@ -54,6 +58,9 @@ class App:
 
     def drain(self, room: Room) -> list[tuple]:
         owner = self.meta.get(room.code, {}).get("owner")
+        if room.phase == "closed":
+            self.rooms.pop(room.code, None)
+            self.meta.pop(room.code, None)
         return [(kind, movie, data, owner) for kind, movie, data in room.drain_events()]
 
     def record(self, events: list[tuple], now: float) -> None:
@@ -72,12 +79,12 @@ class App:
                 sys.stderr.write("stats: %r\n" % e)
 
     def janitor(self, now: float) -> None:
-        for code, room in list(self.rooms.items()):
+        if now - self.swept < 1:
+            return
+        self.swept = now
+        for room in list(self.rooms.values()):
             room.tick(now)
             self.pending += self.drain(room)
-            if room.phase == "closed":
-                del self.rooms[code]
-                self.meta.pop(code, None)
         for log, window in ((self.created, CREATE_WINDOW), (self.misses, MISS_WINDOW)):
             for k in [k for k, ts in log.items() if not ts or now - ts[-1] >= window]:
                 del log[k]
@@ -91,22 +98,25 @@ class App:
             raise GameError("This room is closed", 404)
         return room
 
-    def room_to_join(self, code: str, client: str, now: float) -> Room:
+    def room_to_join(self, code: str, client: str, now: float, wide: str | None = None) -> Room:
         self.janitor(now)
-        misses = [t for t in self.misses.get(client, []) if now - t < MISS_WINDOW]
-        if len(misses) >= MISS_LIMIT:
+        caps = {k: n for k, n in ((client, MISS_LIMIT), (wide, MISS_LIMIT_48)) if k}
+        misses = {k: [t for t in self.misses.get(k, []) if now - t < MISS_WINDOW] for k in caps}
+        if any(len(misses[k]) >= n for k, n in caps.items()):
             raise GameError("Too many wrong room codes, try again in a few minutes", 429)
         room = self.rooms.get(code.strip().upper())
         if room is None:
-            self.misses[client] = misses + [now]
+            for k, ts in misses.items():
+                self.misses[k] = ts + [now]
             raise GameError("This room is closed", 404)
         return room
 
-    def create(self, name, client: str, now: float, solo: bool = False) -> dict:
+    def create(self, name, client: str, now: float, solo: bool = False, wide: str | None = None) -> dict:
         self.janitor(now)
         recent = [t for t in self.created.get(client, []) if now - t < CREATE_WINDOW]
         if len(recent) >= CREATE_LIMIT or \
-                sum(m.get("owner") == client for m in self.meta.values()) >= OPEN_PER_CLIENT:
+                sum(m.get("owner") == client for m in self.meta.values()) >= OPEN_PER_CLIENT or \
+                wide and sum(m.get("wide") == wide for m in self.meta.values()) >= OPEN_PER_48:
             raise GameError("Too many new rooms, try again in a few minutes", 429)
         if len(self.rooms) >= MAX_ROOMS:
             raise GameError("Too many rooms open right now, try again later", 503)
@@ -119,7 +129,7 @@ class App:
             room.start(player.id, now)
         self.created[client] = recent + [now]
         self.rooms[code] = room
-        self.meta[code] = {"seed": random.randrange(1 << 30), "page": 1, "refilling": False, "owner": client}
+        self.meta[code] = {"seed": random.randrange(1 << 30), "page": 1, "refilling": False, "owner": client, "wide": wide}
         self.count("rooms_solo" if solo else "rooms_group")
         self.count("players")
         return {"code": code, "pid": player.id}
@@ -251,13 +261,14 @@ class Handler(BaseHTTPRequestHandler):
             raise GameError("Bad request", 400)
         return data
 
-    def _client(self) -> str:
-        raw = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+    def _client(self) -> tuple[str, str | None]:
         try:
-            ip = ipaddress.ip_address(raw.strip())
+            ip = ipaddress.ip_address((self.headers.get("CF-Connecting-IP") or "").strip())
         except ValueError:
-            return raw[:64]
-        return str(ipaddress.ip_network("%s/64" % ip, strict=False)) if ip.version == 6 else str(ip)
+            ip = ipaddress.ip_address(self.client_address[0])
+        if ip.version == 4:
+            return str(ip), None
+        return str(ipaddress.ip_network("%s/64" % ip, strict=False)), str(ipaddress.ip_network("%s/48" % ip, strict=False))
 
     def _api(self, method: str) -> None:
         app, now = self.app, clock()
@@ -273,16 +284,16 @@ class Handler(BaseHTTPRequestHandler):
                     sys.stderr.write("stats: %r\n" % e)
                     return self._json(200, {"top": [], "recent": []})
             body = self._body() if method == "POST" else {}
-            client = self._client()
+            client, wide = self._client()
             genre_ids = {g["id"] for g in app.tmdb.genres()} if body.get("type") == "genres" else set()
             with app.lock:
                 if method == "POST" and path == "/api/rooms":
-                    return self._json(200, app.create(body.get("name"), client, now, body.get("solo") is True))
+                    return self._json(200, app.create(body.get("name"), client, now, body.get("solo") is True, wide))
                 m = re.fullmatch(r"/api/rooms/([^/]+)(/join|/action)?", path)
                 if not m:
                     raise GameError("Not found", 404)
                 if m.group(2) == "/join":
-                    room = app.room_to_join(m.group(1), client, now)
+                    room = app.room_to_join(m.group(1), client, now, wide)
                 else:
                     room = app.room(m.group(1), now, pid)
                 if method == "POST" and m.group(2) == "/join":
@@ -381,17 +392,59 @@ class MetricsHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def make_metrics_server(host: str, port: int, app: App) -> ThreadingHTTPServer:
-    srv = ThreadingHTTPServer((host, port), type("BoundMetrics", (MetricsHandler,), {"app": app}))
-    srv.daemon_threads = True
-    return srv
+class Server(ThreadingHTTPServer):
+    def __init__(self, address, handler):
+        super().__init__(address, handler)
+        self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.born: dict[socket.socket, float] = {}
+        self.closed = threading.Event()
+        threading.Thread(target=self.reap, daemon=True).start()
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            return self.shutdown_request(request)
+        self.born[request] = time.monotonic()
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.done(request)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.done(request)
+
+    def done(self, request):
+        self.born.pop(request, None)
+        self.slots.release()
+
+    def reap(self):
+        while not self.closed.wait(REQUEST_DEADLINE / 4):
+            cutoff = time.monotonic() - REQUEST_DEADLINE
+            for request, born in self.born.copy().items():
+                if born < cutoff:
+                    try:
+                        request.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], OSError):
+            super().handle_error(request, client_address)
+
+    def server_close(self):
+        self.closed.set()
+        super().server_close()
 
 
-def make_server(host: str, port: int, tmdb, stats: Stats) -> ThreadingHTTPServer:
-    handler = type("BoundHandler", (Handler,), {"app": App(tmdb, stats)})
-    srv = ThreadingHTTPServer((host, port), handler)
-    srv.daemon_threads = True
-    return srv
+def make_metrics_server(host: str, port: int, app: App) -> Server:
+    return Server((host, port), type("BoundMetrics", (MetricsHandler,), {"app": app}))
+
+
+def make_server(host: str, port: int, tmdb, stats: Stats) -> Server:
+    return Server((host, port), type("BoundHandler", (Handler,), {"app": App(tmdb, stats)}))
 
 
 def main() -> None:

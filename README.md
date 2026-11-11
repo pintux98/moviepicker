@@ -33,7 +33,7 @@ A TMDB API Read Access Token (free): create an account at themoviedb.org, then S
 ```sh
 docker build -t moviepicker .
 docker run -d --name moviepicker --restart unless-stopped \
-  -e TMDB_TOKEN=your_token -p 8000:8000 moviepicker
+  -e TMDB_TOKEN=your_token -p 127.0.0.1:8000:8000 moviepicker
 ```
 
 Or with Docker Compose:
@@ -43,7 +43,7 @@ services:
   moviepicker:
     build: .
     restart: unless-stopped
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     environment:
       TMDB_TOKEN: ${TMDB_TOKEN}
 ```

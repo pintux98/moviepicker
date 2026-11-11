@@ -1,9 +1,12 @@
+import contextlib
 import http.client
+import io
 import re
 import sqlite3
 import tempfile
 from pathlib import Path
 import json
+import socket
 import threading
 import time
 import unittest
@@ -33,12 +36,16 @@ class FakeTmdb:
         return m
 
 
+def mem(test, cls=Stats):
+    return test.enterContext(contextlib.closing(cls(":memory:")))
+
+
 class ApiBase(unittest.TestCase):
     tmdb = FakeTmdb()
 
     def setUp(self):
         server.clock = time.time
-        self.srv = server.make_server("127.0.0.1", 0, self.tmdb, Stats(":memory:"))
+        self.srv = server.make_server("127.0.0.1", 0, self.tmdb, mem(self))
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.port = self.srv.server_address[1]
 
@@ -206,6 +213,26 @@ class Api(ApiBase):
         self.assertEqual(self.call("POST", "/api/rooms", {"name": "x"}, ip="2001:db8:0:1::3")[0], 429)
         self.create(ip="2001:db8:0:2::1")
 
+    def test_ipv6_48_open_rooms_capped(self):
+        for n in range(5):
+            self.create(ip="2001:db8:1:%d::1" % n)
+            self.create(ip="2001:db8:1:%d::2" % n)
+        self.assertEqual(self.call("POST", "/api/rooms", {"name": "x"}, ip="2001:db8:1:5::1")[0], 429)
+        self.create(ip="2001:db8:2::1")
+
+    def test_ipv6_48_wrong_codes_capped(self):
+        code, _ = self.create()
+        for n in range(5):
+            for _ in range(20):
+                self.assertEqual(self.call("POST", "/api/rooms/ZZZZZZ/join", {"name": "g"}, ip="2001:db8:1:%d::1" % n)[0], 404)
+        self.assertEqual(self.call("POST", "/api/rooms/%s/join" % code, {"name": "g"}, ip="2001:db8:1:5::1")[0], 429)
+        self.assertEqual(self.call("POST", "/api/rooms/%s/join" % code, {"name": "h"}, ip="2001:db8:2::1")[0], 200)
+
+    def test_bad_cf_header_uses_peer(self):
+        self.create(ip="garbage1")
+        self.create(ip="garbage2")
+        self.assertEqual(self.call("POST", "/api/rooms", {"name": "x"}, ip="garbage3")[0], 429)
+
     def test_room_guessing_rate_limited(self):
         code, a = self.create(ip="7.7.7.7")
         for i in range(20):
@@ -339,7 +366,8 @@ class BrokenStats(Stats):
 class ApiStatsBroken(ApiBase):
     def setUp(self):
         server.clock = time.time
-        self.srv = server.make_server("127.0.0.1", 0, FakeTmdb(), BrokenStats(":memory:"))
+        self.enterContext(contextlib.redirect_stderr(io.StringIO()))
+        self.srv = server.make_server("127.0.0.1", 0, FakeTmdb(), mem(self, BrokenStats))
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.port = self.srv.server_address[1]
 
@@ -356,15 +384,101 @@ class ApiStatsBroken(ApiBase):
 
 class OpenStats(unittest.TestCase):
     def test_unwritable_path_falls_back_to_memory(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(io.StringIO()):
             s = server.open_stats(str(Path(d) / "no" / "such" / "stats.db"))
             s.record_pick(Movie(1, "M", 2000, 7.0, "o", None, [16]), 1.0)
             self.assertEqual(s.top()[0]["picked"], 1)
             s.close()
 
 
+class Limits(unittest.TestCase):
+    def setUp(self):
+        self.saved = server.MAX_CONNECTIONS, server.REQUEST_DEADLINE
+        self.socks = []
+        self.srv = None
+
+    def tearDown(self):
+        for s in self.socks:
+            s.close()
+        if self.srv:
+            self.srv.shutdown()
+            self.srv.server_close()
+        server.MAX_CONNECTIONS, server.REQUEST_DEADLINE = self.saved
+
+    def start(self):
+        self.srv = server.make_server("127.0.0.1", 0, FakeTmdb(), mem(self))
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def connect(self):
+        s = socket.create_connection(self.srv.server_address, timeout=5)
+        self.socks.append(s)
+        return s
+
+    def get(self):
+        c = http.client.HTTPConnection(*self.srv.server_address, timeout=5)
+        try:
+            c.request("GET", "/")
+            return c.getresponse().status
+        except ConnectionError:
+            return None
+        finally:
+            c.close()
+
+    def test_slow_request_cut_at_deadline(self):
+        server.REQUEST_DEADLINE = 1
+        self.start()
+        s = self.connect()
+        s.settimeout(0.3)
+        began, gone = time.monotonic(), False
+        while not gone and time.monotonic() - began < 5:
+            try:
+                s.sendall(b"G")
+                gone = s.recv(1) == b""
+            except TimeoutError:
+                pass
+            except ConnectionError:
+                gone = True
+        self.assertTrue(gone)
+        self.assertLess(time.monotonic() - began, 4)
+        self.assertEqual(self.get(), 200)
+
+    def test_connections_capped(self):
+        server.MAX_CONNECTIONS = 2
+        self.start()
+        busy = [self.connect(), self.connect()]
+        self.assertEqual(self.connect().recv(1), b"")
+        for s in busy:
+            s.close()
+        began, status = time.monotonic(), None
+        while status != 200 and time.monotonic() - began < 5:
+            status = self.get()
+        self.assertEqual(status, 200)
+
+    def test_metrics_server_capped(self):
+        server.MAX_CONNECTIONS = 1
+        self.srv = server.make_metrics_server("127.0.0.1", 0, server.App(FakeTmdb(), mem(self)))
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.connect()
+        self.assertEqual(self.connect().recv(1), b"")
+
+
+class AppTests(unittest.TestCase):
+    def test_janitor_sweeps_once_per_second(self):
+        app = server.App(FakeTmdb(), mem(self))
+        room = app.rooms[app.create("Ann", "1.1.1.1", 1000)["code"]]
+        ticks = []
+        room.tick = ticks.append
+        app.janitor(1002)
+        app.janitor(1002.5)
+        self.assertEqual(ticks, [1002])
+
+
 class ApiTmdbDown(ApiBase):
     tmdb = FakeTmdb(fail=True)
+
+    def setUp(self):
+        self.enterContext(contextlib.redirect_stderr(io.StringIO()))
+        super().setUp()
 
     def test_tmdb_failure_keeps_room_alive(self):
         code, a = self.create()
